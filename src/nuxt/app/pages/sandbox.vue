@@ -1157,40 +1157,61 @@ thead th.scenario { color: #3f6ae0; }
   color: #3f6ae0;
   font-size: 0.72rem;
   font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
   white-space: nowrap;
+}
+
+/* Visual hierarchy: budget rows are solid bands, group rows are small-caps
+   labels indented one level, category rows indent beneath them. */
+.plan-row th, .plan-row td {
+  background: #eef1f6;
+  border-top: 14px solid #fff;
+  border-bottom: 1px solid #d9dee8;
+  padding-top: 0.55rem;
+  padding-bottom: 0.55rem;
 }
 
 .plan-row th {
   text-align: left;
-  padding-top: 1.6rem;
   font-size: 0.95rem;
-  border-bottom: 2px solid #ddd;
+  font-weight: 700;
+  color: #1d2129;
 }
 
 .plan-row td {
-  padding-top: 1.6rem;
   font-size: 0.85rem;
-  color: #888;
-  border-bottom: 2px solid #ddd;
+  color: #5a6272;
 }
+
+.plan-row td.sep { border-left-color: #d3daea; }
 
 .plan-empty td {
   color: #999;
   font-size: 0.85rem;
   font-style: italic;
+  padding-left: 1.7rem;
 }
 
 .group-row th {
   text-align: left;
-  padding-top: 1.1rem;
-  font-size: 0.85rem;
+  padding: 0.95rem 0.6rem 0.35rem 1.7rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #5f6675;
 }
 
 .group-row td {
-  padding-top: 1.1rem;
+  padding-top: 0.95rem;
+  padding-bottom: 0.35rem;
   color: #888;
   font-size: 0.85rem;
+  vertical-align: bottom;
 }
+
+td.name { padding-left: 2.4rem; }
 
 .plan-row td.emphasized,
 .group-row td.emphasized {
@@ -1255,13 +1276,13 @@ tr.off .goal-bar i { background: #c3d1f4; }
 }
 
 .add-row td {
-  padding: 0.2rem 0.6rem 0.55rem;
+  padding: 0.2rem 0.6rem 0.55rem 2.35rem;
 }
 
 .add-btn {
   border: none;
   background: none;
-  padding: 0.15rem 0.25rem 0.15rem 1.55rem;
+  padding: 0.15rem 0.25rem;
   font: inherit;
   font-size: 0.8rem;
   color: #4a7dff;
