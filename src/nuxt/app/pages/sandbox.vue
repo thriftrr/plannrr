@@ -157,7 +157,9 @@ async function loadDetails () {
 
 watch([selectedPlanIds, month], loadDetails)
 
-const { drafts, disabled, setDraft, clearDraft, setDisabled, resetAll } = useSandboxDrafts(() => month.value)
+const { drafts, disabled, custom, setDraft, clearDraft, setDisabled, addCustom, renameCustom, removeCustom, resetAll } = useSandboxDrafts(() => month.value)
+
+const isCustom = (category: Category) => category.id.startsWith('custom-')
 
 // What-if income lives in the same draft map under a reserved key, so it
 // persists, resets, and scopes per month exactly like category drafts.
@@ -214,6 +216,33 @@ function buildGroups (detail: MonthDetail | null): GroupRow[] {
   return rows
 }
 
+// What-if rows the user inserted, folded into their plan's groups. They carry
+// no goal, so Goal rollups stay anchored while Monthly and Difference move.
+function withCustomRows (planId: string, groups: GroupRow[]): GroupRow[] {
+  for (const [id, row] of Object.entries(custom.value)) {
+    if (row.planId !== planId) continue
+    let group = groups.find(item => item.name === row.groupName)
+    if (!group) {
+      group = { name: row.groupName, categories: [] }
+      groups.push(group)
+    }
+    group.categories.push({
+      id,
+      category_group_id: 'custom',
+      category_group_name: row.groupName,
+      name: row.name,
+      hidden: false,
+      internal: false,
+      budgeted: 0,
+      activity: 0,
+      balance: 0,
+      goal_type: null,
+      deleted: false
+    })
+  }
+  return groups
+}
+
 const sections = computed<PlanSection[]>(() =>
   selectedPlanIds.value.map((id) => {
     const detail = detailsByPlan.value[id] ?? null
@@ -221,7 +250,7 @@ const sections = computed<PlanSection[]>(() =>
       planId: id,
       planName: plans.value.find(item => item.id === id)?.name ?? 'Budget',
       detail,
-      groups: buildGroups(detail)
+      groups: detail ? withCustomRows(id, buildGroups(detail)) : []
     }
   })
 )
@@ -285,8 +314,10 @@ const changeCount = computed(() =>
   changes.value.length + excluded.value.length + (incomeDelta.value !== 0 ? 1 : 0)
 )
 
-const goalCount = computed(() => visibleCategories.value.length)
-const includedCount = computed(() => goalCount.value - excluded.value.length)
+const goalCount = computed(() => visibleCategories.value.filter(category => !isCustom(category)).length)
+const includedCount = computed(() =>
+  goalCount.value - excluded.value.filter(category => !isCustom(category)).length
+)
 
 const requiredBase = computed(() =>
   visibleCategories.value.reduce((sum, category) => sum + goalMonthly(category), 0)
@@ -351,6 +382,15 @@ function onAmountChange (category: Category, event: Event) {
   setDraft(category.id, Math.round(parsed * 1000), goalMonthly(category))
 }
 
+function onAddRow (section: PlanSection, group: GroupRow) {
+  const id = addCustom(section.planId, group.name)
+  nextTick(() => document.getElementById(`custom-name-${id}`)?.focus())
+}
+
+function onCustomNameChange (id: string, event: Event) {
+  renameCustom(id, (event.target as HTMLInputElement).value)
+}
+
 function onIncomeChange (event: Event) {
   const raw = (event.target as HTMLInputElement).value
   const parsed = Number.parseFloat(raw)
@@ -359,6 +399,49 @@ function onIncomeChange (event: Event) {
     return
   }
   setDraft(INCOME_KEY, Math.round(parsed * 1000), incomeLive.value)
+}
+
+// ---- CSV export -----------------------------------------------------------
+// Snapshot of the current scenario: one row per category (what-if rows
+// included), Monthly holds the effective amount (0 when excluded) so the
+// column sums to Required, then Income/Required/Remaining summary rows.
+
+function csvEscape (value: string) {
+  return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
+}
+
+function exportCsv () {
+  const money = (milliunits: number) => (milliunits / 1000).toFixed(2)
+  const lines = ['Budget,Group,Category,Goal / month,Monthly,Difference,Included']
+
+  for (const section of sections.value) {
+    for (const group of section.groups) {
+      for (const category of group.categories) {
+        lines.push([
+          csvEscape(section.planName),
+          csvEscape(group.name),
+          csvEscape(category.name || 'What-if row'),
+          isCustom(category) ? '' : money(goalMonthly(category)),
+          money(effectiveMonthly(category)),
+          money(effectiveDelta(category)),
+          isOff(category) ? 'no' : 'yes'
+        ].join(','))
+      }
+    }
+  }
+
+  lines.push('')
+  lines.push(['', '', 'Income', '', money(income.value), money(incomeDelta.value), ''].join(','))
+  lines.push(['', '', 'Required', money(requiredBase.value), money(requiredTotal.value), money(totalDelta.value), ''].join(','))
+  lines.push(['', '', 'Remaining', money(remainingBase.value), money(remaining.value), '', ''].join(','))
+
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `ynabrr-scenario-${month.value.slice(0, 7)}.csv`
+  link.click()
+  URL.revokeObjectURL(url)
 }
 
 function goalLabel (category: Category) {
@@ -401,6 +484,12 @@ const monthLabel = (value: string) =>
         <select v-if="monthOptions.length" v-model="month" aria-label="Month">
           <option v-for="item in monthOptions" :key="item" :value="item">{{ monthLabel(item) }}</option>
         </select>
+        <button
+          class="export-btn"
+          :disabled="!hasAnyDetail"
+          title="Download the current scenario as a CSV"
+          @click="exportCsv"
+        >Export CSV</button>
       </div>
     </header>
 
@@ -596,13 +685,26 @@ const monthLabel = (value: string) =>
                       @change="setDisabled(category.id, !isOff(category))"
                     >
                   </label>
-                  <span class="name-text">{{ category.name }}</span>
+                  <input
+                    v-if="isCustom(category)"
+                    :id="`custom-name-${category.id}`"
+                    class="name-input"
+                    type="text"
+                    placeholder="New row…"
+                    :value="category.name"
+                    aria-label="What-if row name"
+                    @change="onCustomNameChange(category.id, $event)"
+                  >
+                  <span v-else class="name-text">{{ category.name }}</span>
                 </td>
                 <td class="goal">
-                  <span>{{ goalLabel(category) }}</span>
-                  <span v-if="category.goal_percentage_complete != null" class="goal-bar">
-                    <i :style="{ width: `${Math.min(category.goal_percentage_complete, 100)}%` }" />
-                  </span>
+                  <span v-if="isCustom(category)" class="goal-hint">what-if row</span>
+                  <template v-else>
+                    <span>{{ goalLabel(category) }}</span>
+                    <span v-if="category.goal_percentage_complete != null" class="goal-bar">
+                      <i :style="{ width: `${Math.min(category.goal_percentage_complete, 100)}%` }" />
+                    </span>
+                  </template>
                 </td>
                 <td class="num scenario sandbox-cell">
                   <input
@@ -614,6 +716,13 @@ const monthLabel = (value: string) =>
                     @change="onAmountChange(category, $event)"
                   >
                   <button
+                    v-if="isCustom(category)"
+                    class="reset"
+                    title="Remove this what-if row"
+                    @click="removeCustom(category.id)"
+                  >✕</button>
+                  <button
+                    v-else
                     class="reset"
                     :class="{ ghosted: isOff(category) || deltaFor(category) === 0 }"
                     :title="`Reset to the goal's ${fmt(goalMonthly(category))}`"
@@ -623,6 +732,11 @@ const monthLabel = (value: string) =>
                 </td>
                 <td class="num scenario diff" :class="{ active: effectiveDelta(category) !== 0, 'off-diff': isOff(category) }">
                   {{ effectiveDelta(category) !== 0 ? fmtDelta(effectiveDelta(category)) : '—' }}
+                </td>
+              </tr>
+              <tr v-if="!filterActive && planOpen(section) && groupOpen(section, group) && section.detail" class="add-row">
+                <td colspan="4">
+                  <button class="add-btn" @click="onAddRow(section, group)">+ Add a what-if row</button>
                 </td>
               </tr>
             </template>
@@ -651,17 +765,32 @@ const monthLabel = (value: string) =>
               <template v-if="multiPlan">{{ planNameByCategory.get(category.id) }} · </template>{{ category.category_group_name }} · {{ category.name }}
             </span>
             <span class="change-amounts">
-              {{ fmt(goalMonthly(category)) }} → <strong>{{ fmt(draftFor(category)) }}</strong>
+              <template v-if="isCustom(category)">added · <strong>{{ fmt(draftFor(category)) }}</strong></template>
+              <template v-else>{{ fmt(goalMonthly(category)) }} → <strong>{{ fmt(draftFor(category)) }}</strong></template>
             </span>
             <span class="delta">{{ fmtDelta(deltaFor(category)) }}</span>
-            <button class="reset" :title="`Reset to the goal's ${fmt(goalMonthly(category))}`" @click="clearDraft(category.id)">↺</button>
+            <button
+              v-if="isCustom(category)"
+              class="reset"
+              title="Remove this what-if row"
+              @click="removeCustom(category.id)"
+            >✕</button>
+            <button
+              v-else
+              class="reset"
+              :title="`Reset to the goal's ${fmt(goalMonthly(category))}`"
+              @click="clearDraft(category.id)"
+            >↺</button>
           </div>
           <div v-for="category in excluded" :key="`off-${category.id}`" class="change-row off-change">
             <span class="change-name">
               <template v-if="multiPlan">{{ planNameByCategory.get(category.id) }} · </template>{{ category.category_group_name }} · {{ category.name }}
             </span>
-            <span class="change-amounts">excluded · goal {{ fmt(goalMonthly(category)) }}</span>
-            <span class="delta">{{ fmtDelta(effectiveDelta(category)) }}</span>
+            <span class="change-amounts">
+              <template v-if="isCustom(category)">what-if row excluded</template>
+              <template v-else>excluded · goal {{ fmt(goalMonthly(category)) }}</template>
+            </span>
+            <span class="delta">{{ isCustom(category) ? '' : fmtDelta(effectiveDelta(category)) }}</span>
             <button class="reset" title="Include again" @click="setDisabled(category.id, false)">↺</button>
           </div>
         </div>
@@ -737,6 +866,20 @@ const monthLabel = (value: string) =>
 .filter-input:focus {
   border-color: #4a7dff;
   outline: none;
+}
+
+.export-btn {
+  padding: 0.4rem 0.8rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.export-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .howto {
@@ -1065,6 +1208,37 @@ tr.off .sandbox-cell input {
   border-color: #dde3f0;
 }
 tr.off .goal-bar i { background: #c3d1f4; }
+
+.name-input {
+  width: 11rem;
+  max-width: 100%;
+  padding: 0.25rem 0.45rem;
+  border: 1px solid #b9c9f5;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.875rem;
+}
+
+.goal-hint {
+  font-style: italic;
+  color: #a3aabb;
+}
+
+.add-row td {
+  padding: 0.2rem 0.6rem 0.55rem;
+}
+
+.add-btn {
+  border: none;
+  background: none;
+  padding: 0.15rem 0.25rem 0.15rem 1.55rem;
+  font: inherit;
+  font-size: 0.8rem;
+  color: #4a7dff;
+  cursor: pointer;
+}
+
+.add-btn:hover { text-decoration: underline; }
 
 .reset.ghosted { visibility: hidden; }
 
