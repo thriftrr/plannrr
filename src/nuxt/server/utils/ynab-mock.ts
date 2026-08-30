@@ -50,14 +50,30 @@ const mockCategories: Category[] = [
     goal_type: 'NEED', goal_target: 145_000
   }),
 
-  mockCategory('c-cc', 'g-debt', 'Debt Payments', 'Credit Card', 400_000, -400_000, 0),
-  mockCategory('c-student', 'g-debt', 'Debt Payments', 'Student Loan', 350_000, -350_000, 0),
-  mockCategory('c-car', 'g-debt', 'Debt Payments', 'Car Loan', 285_000, -285_000, 0),
+  mockCategory('c-cc', 'g-debt', 'Debt Payments', 'Credit Card', 400_000, -400_000, 0, {
+    goal_type: 'NEED', goal_target: 400_000
+  }),
+  mockCategory('c-student', 'g-debt', 'Debt Payments', 'Student Loan', 350_000, -350_000, 0, {
+    goal_type: 'NEED', goal_target: 350_000
+  }),
+  mockCategory('c-car', 'g-debt', 'Debt Payments', 'Car Loan', 285_000, -285_000, 0, {
+    goal_type: 'NEED', goal_target: 285_000
+  }),
 
-  mockCategory('c-groceries', 'g-everyday', 'Everyday', 'Groceries', 700_000, -523_670, 176_330),
-  mockCategory('c-gas', 'g-everyday', 'Everyday', 'Gas', 160_000, -87_210, 72_790),
-  mockCategory('c-dining', 'g-everyday', 'Everyday', 'Dining Out', 200_000, -214_890, -14_890),
-  mockCategory('c-fun', 'g-everyday', 'Everyday', 'Fun Money', 150_000, -60_000, 90_000),
+  mockCategory('c-groceries', 'g-everyday', 'Everyday', 'Groceries', 700_000, -523_670, 176_330, {
+    goal_type: 'NEED', goal_target: 700_000
+  }),
+  mockCategory('c-gas', 'g-everyday', 'Everyday', 'Gas', 160_000, -87_210, 72_790, {
+    goal_type: 'NEED', goal_target: 160_000
+  }),
+  mockCategory('c-dining', 'g-everyday', 'Everyday', 'Dining Out', 200_000, -214_890, -14_890, {
+    goal_type: 'NEED', goal_target: 200_000
+  }),
+  mockCategory('c-fun', 'g-everyday', 'Everyday', 'Fun Money', 150_000, -60_000, 90_000, {
+    goal_type: 'NEED', goal_target: 150_000
+  }),
+  // No goal on purpose — categories without goals stay off the sandbox page.
+  mockCategory('c-misc', 'g-everyday', 'Everyday', 'Misc', 50_000, -12_500, 37_500),
 
   mockCategory('c-emergency', 'g-savings', 'Savings Goals', 'Emergency Fund', 200_000, 0, 2_400_000, {
     goal_type: 'TB', goal_target: 10_000_000, goal_percentage_complete: 24
