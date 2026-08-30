@@ -49,6 +49,17 @@ const familyCategories: Category[] = [
   // No goal on purpose — categories without goals stay off the sandbox page.
   mockCategory('c-misc', 'g-everyday', 'Everyday', 'Misc', 50_000, -12_500, 37_500),
 
+  // Yearly / non-monthly cadences: goal_target is the amount per period.
+  mockCategory('c-registration', 'g-yearly', 'Yearly', 'Car Registration', 20_000, 0, 140_000, {
+    goal_type: 'NEED', goal_target: 240_000, goal_cadence: 13, goal_cadence_frequency: 1, goal_target_date: '2027-03-15'
+  }),
+  mockCategory('c-prime', 'g-yearly', 'Yearly', 'Amazon Prime', 11_580, 0, 92_640, {
+    goal_type: 'NEED', goal_target: 139_000, goal_cadence: 13, goal_cadence_frequency: 1
+  }),
+  mockCategory('c-water', 'g-yearly', 'Yearly', 'Water Bill', 30_000, -90_000, 60_000, {
+    goal_type: 'NEED', goal_target: 90_000, goal_cadence: 4
+  }),
+
   mockCategory('c-emergency', 'g-savings', 'Savings Goals', 'Emergency Fund', 200_000, 0, 2_400_000, {
     goal_type: 'TB', goal_target: 10_000_000, goal_percentage_complete: 24
   }),

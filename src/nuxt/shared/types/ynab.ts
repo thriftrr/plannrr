@@ -27,6 +27,10 @@ export type Category = {
   activity: number
   balance: number
   goal_type?: GoalType
+  // Repeat cadence: 0 = none, 1 = monthly, 2 = weekly, 3-12 = every (n-1)
+  // months, 13 = yearly, 14 = every 2 years; frequency multiplies 1/2/13.
+  goal_cadence?: number | null
+  goal_cadence_frequency?: number | null
   goal_target?: number | null
   goal_target_date?: string | null
   goal_percentage_complete?: number | null

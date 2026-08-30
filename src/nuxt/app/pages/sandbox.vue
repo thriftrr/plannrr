@@ -166,11 +166,14 @@ const isCustom = (category: Category) => category.id.startsWith('custom-')
 const INCOME_KEY = '__income__'
 
 // ---- Goal math ------------------------------------------------------------
-// Each goal boils down to a monthly requirement:
-// - NEED / MF / DEBT goals: goal_target IS the monthly amount
-// - TBD (save $X by date): remaining amount spread over the months left,
+// Every row shows a true MONTHLY cost, whatever the goal's period:
+// - Repeating goals amortize over their cadence: $600 yearly = $50/mo,
+//   $90 every 3 months = $30/mo, weekly goals scale by 52/12
+// - Save-by-date goals (TB/TBD): remaining amount spread over months left,
 //   a transparent pace rather than YNAB's exact on-track math
 // - TB with no date: no defined pace, so fall back to what's assigned today
+
+const roundToCent = (milliunits: number) => Math.round(milliunits / 10) * 10
 
 function monthsUntil (from: string, to: string) {
   const [fromYear, fromMonth] = from.split('-').map(Number)
@@ -180,17 +183,32 @@ function monthsUntil (from: string, to: string) {
 
 function goalMonthly (category: Category): number {
   if (!category.goal_type) return 0
-  if (category.goal_type === 'TB' || category.goal_type === 'TBD') {
-    if (category.goal_target_date) {
-      const target = category.goal_target ?? 0
-      const remaining = category.goal_overall_left
-        ?? Math.max(target - (category.goal_overall_funded ?? 0), 0)
-      const months = monthsUntil(month.value || category.goal_target_date, category.goal_target_date)
-      return Math.max(Math.round(remaining / months / 10) * 10, 0)
-    }
-    return category.budgeted
+
+  const target = category.goal_target ?? 0
+  const cadence = category.goal_cadence
+  const frequency = Math.max(category.goal_cadence_frequency ?? 1, 1)
+
+  // Repeating goals: goal_target is the amount per period — amortize it.
+  if (cadence != null && cadence !== 0) {
+    if (cadence === 1) return roundToCent(target / frequency)
+    if (cadence === 2) return roundToCent((target * 52) / frequency / 12)
+    if (cadence >= 3 && cadence <= 12) return roundToCent(target / (cadence - 1))
+    if (cadence === 13) return roundToCent(target / (12 * frequency))
+    if (cadence === 14) return roundToCent(target / 24)
   }
-  return category.goal_target ?? 0
+
+  // One-time save-by-date goals: pace over the months left.
+  if (category.goal_target_date) {
+    const remaining = category.goal_overall_left
+      ?? Math.max(target - (category.goal_overall_funded ?? 0), 0)
+    const months = monthsUntil(month.value || category.goal_target_date, category.goal_target_date)
+    return Math.max(roundToCent(remaining / months), 0)
+  }
+
+  if (category.goal_type === 'TB') return category.budgeted
+
+  // MF / DEBT / undated NEED: the target is already a monthly amount.
+  return target
 }
 
 type GroupRow = { name: string, categories: Category[] }
@@ -444,6 +462,18 @@ function exportCsv () {
   URL.revokeObjectURL(url)
 }
 
+// The label shows the goal in its own period; the Monthly column amortizes.
+function cadenceLabel (category: Category) {
+  const cadence = category.goal_cadence
+  const frequency = Math.max(category.goal_cadence_frequency ?? 1, 1)
+  if (cadence === 2) return frequency === 1 ? '/ week' : `/ ${frequency} weeks`
+  if (cadence != null && cadence >= 3 && cadence <= 12) return `/ ${cadence - 1} months`
+  if (cadence === 13) return frequency === 1 ? '/ year' : `/ ${frequency} years`
+  if (cadence === 14) return '/ 2 years'
+  if (cadence === 1 && frequency > 1) return `/ ${frequency} months`
+  return '/ month'
+}
+
 function goalLabel (category: Category) {
   if (!category.goal_type || !category.goal_target) return ''
   const target = fmt(category.goal_target)
@@ -453,7 +483,7 @@ function goalLabel (category: Category) {
     return `${target} by ${date}`
   }
   if (category.goal_type === 'TB') return `Build to ${target}`
-  return `${target} / month`
+  return `${target} ${cadenceLabel(category)}`
 }
 
 const monthLabel = (value: string) =>
