@@ -79,6 +79,10 @@ function defaultMonth (list: MonthSummary[]) {
 
 const { drafts, setDraft, clearDraft, resetAll } = useSandboxDrafts(() => `${planId.value}:${month.value}`)
 
+// What-if income lives in the same draft map under a reserved key, so it
+// persists, resets, and scopes per month exactly like category drafts.
+const INCOME_KEY = '__income__'
+
 // ---- Goal math ------------------------------------------------------------
 // Each goal boils down to a monthly requirement:
 // - NEED / MF / DEBT goals: goal_target IS the monthly amount
@@ -142,15 +146,22 @@ const totalDelta = computed(() =>
   changes.value.reduce((sum, category) => sum + deltaFor(category), 0)
 )
 
+const incomeLive = computed(() => detail.value?.income ?? 0)
+const income = computed(() => drafts.value[INCOME_KEY] ?? incomeLive.value)
+const incomeDelta = computed(() => income.value - incomeLive.value)
+
+const scenarioActive = computed(() => totalDelta.value !== 0 || incomeDelta.value !== 0)
+const changeCount = computed(() => changes.value.length + (incomeDelta.value !== 0 ? 1 : 0))
+
 const requiredBase = computed(() =>
   visibleCategories.value.reduce((sum, category) => sum + goalMonthly(category), 0)
 )
 const requiredTotal = computed(() => requiredBase.value + totalDelta.value)
-const remainingBase = computed(() => (detail.value?.income ?? 0) - requiredBase.value)
-const remaining = computed(() => (detail.value?.income ?? 0) - requiredTotal.value)
+const remainingBase = computed(() => incomeLive.value - requiredBase.value)
+const remaining = computed(() => income.value - requiredTotal.value)
 
 const groupMonthly = (group: GroupRow) => group.categories.reduce((sum, category) => sum + draftFor(category), 0)
-const groupMonthlyBase = (group: GroupRow) => group.categories.reduce((sum, category) => sum + goalMonthly(category), 0)
+const groupDelta = (group: GroupRow) => group.categories.reduce((sum, category) => sum + deltaFor(category), 0)
 
 const formatter = computed(() => new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -159,7 +170,7 @@ const formatter = computed(() => new Intl.NumberFormat('en-US', {
 const fmt = (milliunits: number) => formatter.value.format(milliunits / 1000)
 const fmtDelta = (milliunits: number) => `${milliunits > 0 ? '+' : '−'}${fmt(Math.abs(milliunits))}`
 
-const inputValue = (category: Category) => Number((draftFor(category) / 1000).toFixed(2))
+const toInput = (milliunits: number) => Number((milliunits / 1000).toFixed(2))
 
 function onAmountChange (category: Category, event: Event) {
   const raw = (event.target as HTMLInputElement).value
@@ -169,6 +180,16 @@ function onAmountChange (category: Category, event: Event) {
     return
   }
   setDraft(category.id, Math.round(parsed * 1000), goalMonthly(category))
+}
+
+function onIncomeChange (event: Event) {
+  const raw = (event.target as HTMLInputElement).value
+  const parsed = Number.parseFloat(raw)
+  if (Number.isNaN(parsed)) {
+    clearDraft(INCOME_KEY)
+    return
+  }
+  setDraft(INCOME_KEY, Math.round(parsed * 1000), incomeLive.value)
 }
 
 function goalLabel (category: Category) {
@@ -219,9 +240,10 @@ const monthLabel = (value: string) =>
             Categories without goals stay off this page.
           </li>
           <li>
-            <strong>Tweak the Monthly column.</strong> Type a what-if amount and press Enter —
-            <em>Required</em> and <em>Remaining</em> up top reproject instantly, so you can see
-            what fits inside your income and what's left over.
+            <strong>Tweak the Monthly column — and Income itself.</strong> Type a what-if
+            amount and press Enter; the Difference column and the <em>Required</em> and
+            <em>Remaining</em> totals reproject instantly. Try one paycheck instead of two
+            by editing the Income card.
           </li>
           <li>
             <strong>Nothing is written to YNAB.</strong> Your draft is saved only in this
@@ -247,9 +269,27 @@ const monthLabel = (value: string) =>
     <template v-else>
       <section class="stats">
         <article>
-          <h3>Income</h3>
-          <p>{{ fmt(detail.income) }}</p>
-          <p class="sub">from YNAB this month</p>
+          <h3>Income{{ incomeDelta !== 0 ? ' · scenario' : '' }}</h3>
+          <p class="income-edit">
+            <input
+              type="number"
+              step="0.01"
+              :value="toInput(income)"
+              aria-label="What-if income for this month"
+              title="Edit to try a what-if income — nothing is sent to YNAB"
+              @change="onIncomeChange"
+            >
+            <button
+              v-if="incomeDelta !== 0"
+              class="reset"
+              :title="`Reset to YNAB's ${fmt(incomeLive)}`"
+              @click="clearDraft(INCOME_KEY)"
+            >↺</button>
+          </p>
+          <p class="sub">
+            <template v-if="incomeDelta !== 0">YNAB says {{ fmt(incomeLive) }}</template>
+            <template v-else>from YNAB · edit to try a what-if</template>
+          </p>
         </article>
         <article>
           <h3>Required{{ totalDelta !== 0 ? ' · scenario' : '' }}</h3>
@@ -260,10 +300,10 @@ const monthLabel = (value: string) =>
           </p>
         </article>
         <article :class="{ negative: remaining < 0 }">
-          <h3>Remaining{{ totalDelta !== 0 ? ' · scenario' : '' }}</h3>
+          <h3>Remaining{{ scenarioActive ? ' · scenario' : '' }}</h3>
           <p>{{ fmt(remaining) }}</p>
           <p class="sub">
-            <template v-if="totalDelta !== 0">goals say {{ fmt(remainingBase) }}</template>
+            <template v-if="scenarioActive">was {{ fmt(remainingBase) }}</template>
             <template v-else>income minus required</template>
           </p>
         </article>
@@ -278,13 +318,19 @@ const monthLabel = (value: string) =>
               <th class="num scenario" title="Your what-if monthly amount — starts at the goal's monthly cost; nothing is sent to YNAB">
                 Monthly <span class="th-hint">editable · stays local</span>
               </th>
+              <th class="num scenario" title="Your monthly amount minus the goal's monthly cost">
+                Difference
+              </th>
             </tr>
           </thead>
           <tbody v-for="group in groups" :key="group.name">
             <tr class="group-row">
               <th colspan="2">{{ group.name }}</th>
-              <td class="num scenario" :class="{ emphasized: groupMonthly(group) !== groupMonthlyBase(group) }">
+              <td class="num scenario" :class="{ emphasized: groupDelta(group) !== 0 }">
                 {{ fmt(groupMonthly(group)) }}
+              </td>
+              <td class="num scenario" :class="{ emphasized: groupDelta(group) !== 0 }">
+                {{ groupDelta(group) !== 0 ? fmtDelta(groupDelta(group)) : '—' }}
               </td>
             </tr>
             <tr v-for="category in group.categories" :key="category.id" :class="{ changed: deltaFor(category) !== 0 }">
@@ -299,7 +345,7 @@ const monthLabel = (value: string) =>
                 <input
                   type="number"
                   step="0.01"
-                  :value="inputValue(category)"
+                  :value="toInput(draftFor(category))"
                   :aria-label="`Monthly amount for ${category.name}`"
                   @change="onAmountChange(category, $event)"
                 >
@@ -309,7 +355,9 @@ const monthLabel = (value: string) =>
                   :title="`Reset to the goal's ${fmt(goalMonthly(category))}`"
                   @click="clearDraft(category.id)"
                 >↺</button>
-                <span v-if="deltaFor(category) !== 0" class="delta">{{ fmtDelta(deltaFor(category)) }} vs goal</span>
+              </td>
+              <td class="num scenario diff" :class="{ active: deltaFor(category) !== 0 }">
+                {{ deltaFor(category) !== 0 ? fmtDelta(deltaFor(category)) : '—' }}
               </td>
             </tr>
           </tbody>
@@ -319,8 +367,16 @@ const monthLabel = (value: string) =>
         </p>
       </section>
 
-      <footer v-if="changes.length" class="changebar">
+      <footer v-if="scenarioActive" class="changebar">
         <div v-if="showChanges" class="changes-list">
+          <div v-if="incomeDelta !== 0" class="change-row">
+            <span class="change-name">Income</span>
+            <span class="change-amounts">
+              {{ fmt(incomeLive) }} → <strong>{{ fmt(income) }}</strong>
+            </span>
+            <span class="delta">{{ fmtDelta(incomeDelta) }}</span>
+            <button class="reset" :title="`Reset to YNAB's ${fmt(incomeLive)}`" @click="clearDraft(INCOME_KEY)">↺</button>
+          </div>
           <div v-for="category in changes" :key="category.id" class="change-row">
             <span class="change-name">{{ category.category_group_name }} · {{ category.name }}</span>
             <span class="change-amounts">
@@ -332,8 +388,9 @@ const monthLabel = (value: string) =>
         </div>
         <div class="changebar-row">
           <p>
-            <strong>Draft scenario · {{ changes.length }} {{ changes.length === 1 ? 'change' : 'changes' }}</strong>
-            · required {{ fmtDelta(totalDelta) }}
+            <strong>Draft scenario · {{ changeCount }} {{ changeCount === 1 ? 'change' : 'changes' }}</strong>
+            <template v-if="totalDelta !== 0"> · required {{ fmtDelta(totalDelta) }}</template>
+            <template v-if="incomeDelta !== 0"> · income {{ fmtDelta(incomeDelta) }}</template>
             · Remaining {{ fmt(remainingBase) }} → <strong>{{ fmt(remaining) }}</strong>
             <span class="local-note">saved in this browser only</span>
           </p>
@@ -441,17 +498,25 @@ const monthLabel = (value: string) =>
   border-radius: 8px;
 }
 
+/* Sticky so the totals stay visible while scrolling the table */
 .stats {
+  position: sticky;
+  top: 0;
+  z-index: 5;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
   gap: 1rem;
-  margin: 1.5rem 0;
+  margin: 1rem 0 1.5rem;
+  padding: 0.75rem 0;
+  background: #fff;
+  box-shadow: 0 8px 10px -10px rgb(0 0 0 / 25%);
 }
 
 .stats article {
   padding: 0.9rem 1.1rem;
   border: 1px solid #ddd;
   border-radius: 8px;
+  background: #fff;
 }
 
 .stats h3 {
@@ -475,6 +540,25 @@ const monthLabel = (value: string) =>
 }
 
 .stats .negative p { color: #b3261e; }
+.stats .negative .sub { color: #999; }
+
+.income-edit {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.income-edit input {
+  width: 8.5rem;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid #b9c9f5;
+  border-radius: 6px;
+  background: #f7faff;
+  font: inherit;
+  font-size: 1.35rem;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
 
 .table-wrap { overflow-x: auto; }
 
@@ -508,9 +592,14 @@ td, tbody th {
   border-bottom: 1px solid #eee;
 }
 
-/* The editable what-if column gets a tint and a divider from the read-only side */
+/* The editable what-if columns get a tint; divider on the first of them */
 td.scenario, th.scenario {
   background: #f7faff;
+}
+
+td.sandbox-cell,
+thead th.scenario:first-of-type,
+.group-row td.scenario:first-of-type {
   border-left: 1px solid #dbe4ff;
 }
 
@@ -574,6 +663,9 @@ tr.changed td { background: #eef4ff; }
 }
 
 tr.changed .sandbox-cell input { border-color: #4a7dff; }
+
+td.diff { color: #bbb; }
+td.diff.active { color: #3f6ae0; font-weight: 600; }
 
 .reset {
   margin-left: 0.35rem;
