@@ -390,14 +390,25 @@ const fmtDelta = (milliunits: number) => `${milliunits > 0 ? '+' : '−'}${fmt(M
 
 const toInput = (milliunits: number) => Number((milliunits / 1000).toFixed(2))
 
+// Amount fields accept YNAB-style math ("+200", "1200/12"); after evaluating
+// we write the normalized number back into the field ourselves, since Vue
+// won't re-render when the bound value didn't change (e.g. invalid input).
 function onAmountChange (category: Category, event: Event) {
-  const raw = (event.target as HTMLInputElement).value
-  const parsed = Number.parseFloat(raw)
-  if (Number.isNaN(parsed)) {
+  const target = event.target as HTMLInputElement
+  if (!target.value.trim()) {
     clearDraft(category.id)
+    target.value = String(toInput(draftFor(category)))
     return
   }
-  setDraft(category.id, Math.round(parsed * 1000), goalMonthly(category))
+  const result = evaluateAmountExpression(target.value, draftFor(category) / 1000)
+  if (result !== null) {
+    setDraft(category.id, Math.round(result * 1000), goalMonthly(category))
+  }
+  target.value = String(toInput(draftFor(category)))
+}
+
+function blurOnEnter (event: Event) {
+  (event.target as HTMLInputElement).blur()
 }
 
 function onAddRow (section: PlanSection, group: GroupRow) {
@@ -410,13 +421,17 @@ function onCustomNameChange (id: string, event: Event) {
 }
 
 function onIncomeChange (event: Event) {
-  const raw = (event.target as HTMLInputElement).value
-  const parsed = Number.parseFloat(raw)
-  if (Number.isNaN(parsed)) {
+  const target = event.target as HTMLInputElement
+  if (!target.value.trim()) {
     clearDraft(INCOME_KEY)
+    target.value = String(toInput(income.value))
     return
   }
-  setDraft(INCOME_KEY, Math.round(parsed * 1000), incomeLive.value)
+  const result = evaluateAmountExpression(target.value, income.value / 1000)
+  if (result !== null) {
+    setDraft(INCOME_KEY, Math.round(result * 1000), incomeLive.value)
+  }
+  target.value = String(toInput(income.value))
 }
 
 // ---- CSV export -----------------------------------------------------------
@@ -556,6 +571,8 @@ const monthLabel = (value: string) =>
             <em>Remaining</em> totals reproject instantly. Income adds up across the selected
             budgets — edit it to try one paycheck instead of two. Untick a category or a
             whole group to leave it out of the math, like seeing the month without debt.
+            The amount fields calculate like YNAB's: type <code>1200/12</code> or
+            <code>+200</code> and press Enter.
           </li>
           <li>
             <strong>Nothing is written to YNAB.</strong> Your draft is saved only in this
@@ -584,12 +601,13 @@ const monthLabel = (value: string) =>
           <h3>Income{{ incomeDelta !== 0 ? ' · scenario' : '' }}</h3>
           <p class="income-edit">
             <input
-              type="number"
-              step="0.01"
+              type="text"
+              inputmode="decimal"
               :value="toInput(income)"
               aria-label="What-if income for this month"
-              title="Edit to try a what-if income — nothing is sent to YNAB"
+              title="Edit to try a what-if income — does math too: +1000, /2, 3250*2. Nothing is sent to YNAB"
               @change="onIncomeChange"
+              @keydown.enter="blurOnEnter"
             >
             <button
               v-if="incomeDelta !== 0"
@@ -738,12 +756,14 @@ const monthLabel = (value: string) =>
                 </td>
                 <td class="num scenario sandbox-cell">
                   <input
-                    type="number"
-                    step="0.01"
+                    type="text"
+                    inputmode="decimal"
                     :value="toInput(draftFor(category))"
                     :aria-label="`Monthly amount for ${category.name}`"
                     :disabled="isOff(category)"
+                    title="Does math: 100+50, +200, -.37, *2, 1200/12 — Enter to apply"
                     @change="onAmountChange(category, $event)"
+                    @keydown.enter="blurOnEnter"
                   >
                   <button
                     v-if="isCustom(category)"
