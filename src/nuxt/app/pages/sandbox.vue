@@ -12,12 +12,18 @@ const isMock = ref(false)
 
 const INTRO_KEY = 'ynabrr:sandbox:intro'
 const SELECTED_KEY = 'ynabrr:sandbox:selected-plans'
+const COLLAPSED_PLANS_KEY = 'ynabrr:sandbox:collapsed-plans'
+const COLLAPSED_GROUPS_KEY = 'ynabrr:sandbox:collapsed-groups'
 const showIntro = ref(false)
 const showChanges = ref(false)
+const collapsedPlans = ref<Record<string, boolean>>({})
+const collapsedGroups = ref<Record<string, boolean>>({})
 
 onMounted(async () => {
   try {
     showIntro.value = localStorage.getItem(INTRO_KEY) !== 'dismissed'
+    collapsedPlans.value = JSON.parse(localStorage.getItem(COLLAPSED_PLANS_KEY) ?? '{}')
+    collapsedGroups.value = JSON.parse(localStorage.getItem(COLLAPSED_GROUPS_KEY) ?? '{}')
   } catch {
     showIntro.value = true
   }
@@ -66,6 +72,20 @@ watch(selectedPlanIds, (ids) => {
   } catch { /* storage blocked — selection just won't persist */ }
 })
 
+watch(collapsedPlans, (value) => {
+  if (!import.meta.client) return
+  try {
+    localStorage.setItem(COLLAPSED_PLANS_KEY, JSON.stringify(value))
+  } catch { /* storage blocked — accordion state just won't persist */ }
+}, { deep: true })
+
+watch(collapsedGroups, (value) => {
+  if (!import.meta.client) return
+  try {
+    localStorage.setItem(COLLAPSED_GROUPS_KEY, JSON.stringify(value))
+  } catch { /* storage blocked — accordion state just won't persist */ }
+}, { deep: true })
+
 // Months arrive per plan; the picker offers the union across selected plans.
 const monthOptions = computed(() => {
   const keys = new Set<string>()
@@ -110,11 +130,18 @@ async function loadDetails () {
     const entries = await Promise.all(selectedPlanIds.value.map(async (id) => {
       const key = `${id}:${month.value}`
       if (!detailCache.has(key)) {
-        try {
-          const data = await $fetch<{ month: MonthDetail }>(`/api/ynab/${id}/months/${month.value}`)
-          detailCache.set(key, data.month)
-        } catch {
+        // When the plan's month list is known and lacks this month (e.g. an
+        // archived budget), skip the request instead of asking for a 404.
+        const knownMonths = monthsByPlan.value[id]
+        if (knownMonths && !knownMonths.some(item => item.month === month.value)) {
           detailCache.set(key, null)
+        } else {
+          try {
+            const data = await $fetch<{ month: MonthDetail }>(`/api/ynab/${id}/months/${month.value}`)
+            detailCache.set(key, data.month)
+          } catch {
+            detailCache.set(key, null)
+          }
         }
       }
       return [id, detailCache.get(key) ?? null] as const
@@ -129,7 +156,7 @@ async function loadDetails () {
 
 watch([selectedPlanIds, month], loadDetails)
 
-const { drafts, setDraft, clearDraft, resetAll } = useSandboxDrafts(() => month.value)
+const { drafts, disabled, setDraft, clearDraft, setDisabled, resetAll } = useSandboxDrafts(() => month.value)
 
 // What-if income lives in the same draft map under a reserved key, so it
 // persists, resets, and scopes per month exactly like category drafts.
@@ -218,12 +245,18 @@ const planNameByCategory = computed(() => {
 const draftFor = (category: Category) => drafts.value[category.id] ?? goalMonthly(category)
 const deltaFor = (category: Category) => draftFor(category) - goalMonthly(category)
 
+// Excluded rows contribute nothing, so their "difference" is the whole goal saved.
+const isOff = (category: Category) => Boolean(disabled.value[category.id])
+const effectiveMonthly = (category: Category) => isOff(category) ? 0 : draftFor(category)
+const effectiveDelta = (category: Category) => effectiveMonthly(category) - goalMonthly(category)
+
 const changes = computed(() =>
-  visibleCategories.value.filter(category => deltaFor(category) !== 0)
+  visibleCategories.value.filter(category => !isOff(category) && deltaFor(category) !== 0)
 )
+const excluded = computed(() => visibleCategories.value.filter(category => isOff(category)))
 
 const totalDelta = computed(() =>
-  changes.value.reduce((sum, category) => sum + deltaFor(category), 0)
+  visibleCategories.value.reduce((sum, category) => sum + effectiveDelta(category), 0)
 )
 
 const incomeLive = computed(() =>
@@ -232,8 +265,15 @@ const incomeLive = computed(() =>
 const income = computed(() => drafts.value[INCOME_KEY] ?? incomeLive.value)
 const incomeDelta = computed(() => income.value - incomeLive.value)
 
-const scenarioActive = computed(() => totalDelta.value !== 0 || incomeDelta.value !== 0)
-const changeCount = computed(() => changes.value.length + (incomeDelta.value !== 0 ? 1 : 0))
+const scenarioActive = computed(() =>
+  totalDelta.value !== 0 || incomeDelta.value !== 0 || excluded.value.length > 0
+)
+const changeCount = computed(() =>
+  changes.value.length + excluded.value.length + (incomeDelta.value !== 0 ? 1 : 0)
+)
+
+const goalCount = computed(() => visibleCategories.value.length)
+const includedCount = computed(() => goalCount.value - excluded.value.length)
 
 const requiredBase = computed(() =>
   visibleCategories.value.reduce((sum, category) => sum + goalMonthly(category), 0)
@@ -242,10 +282,34 @@ const requiredTotal = computed(() => requiredBase.value + totalDelta.value)
 const remainingBase = computed(() => incomeLive.value - requiredBase.value)
 const remaining = computed(() => income.value - requiredTotal.value)
 
-const groupMonthly = (group: GroupRow) => group.categories.reduce((sum, category) => sum + draftFor(category), 0)
-const groupDelta = (group: GroupRow) => group.categories.reduce((sum, category) => sum + deltaFor(category), 0)
+const groupMonthly = (group: GroupRow) => group.categories.reduce((sum, category) => sum + effectiveMonthly(category), 0)
+const groupDelta = (group: GroupRow) => group.categories.reduce((sum, category) => sum + effectiveDelta(category), 0)
 const sectionMonthly = (section: PlanSection) => section.groups.reduce((sum, group) => sum + groupMonthly(group), 0)
 const sectionDelta = (section: PlanSection) => section.groups.reduce((sum, group) => sum + groupDelta(group), 0)
+const sectionCategories = (section: PlanSection) => section.groups.flatMap(group => group.categories)
+
+// Accordion state: a budget with no plan row (single selection) is always open.
+const groupKey = (section: PlanSection, group: GroupRow) => `${section.planId}:${group.name}`
+const planOpen = (section: PlanSection) => !multiPlan.value || !collapsedPlans.value[section.planId]
+const groupOpen = (section: PlanSection, group: GroupRow) => !collapsedGroups.value[groupKey(section, group)]
+const togglePlanOpen = (section: PlanSection) => {
+  collapsedPlans.value[section.planId] = !collapsedPlans.value[section.planId]
+}
+const toggleGroupOpen = (section: PlanSection, group: GroupRow) => {
+  const key = groupKey(section, group)
+  collapsedGroups.value[key] = !collapsedGroups.value[key]
+}
+const editedCount = (categories: Category[]) =>
+  categories.filter(category => !isOff(category) && deltaFor(category) !== 0).length
+const offCount = (categories: Category[]) => categories.filter(category => isOff(category)).length
+
+// Include/exclude checkboxes: the group checkbox reflects its categories.
+const groupAllOff = (group: GroupRow) => group.categories.every(category => isOff(category))
+const groupMixed = (group: GroupRow) => !groupAllOff(group) && group.categories.some(category => isOff(category))
+const toggleGroupIncluded = (group: GroupRow) => {
+  const turnOff = group.categories.some(category => !isOff(category))
+  for (const category of group.categories) setDisabled(category.id, turnOff)
+}
 
 const formatter = computed(() => {
   const first = plans.value.find(item => item.id === selectedPlanIds.value[0])
@@ -345,7 +409,8 @@ const monthLabel = (value: string) =>
             <strong>Tweak the Monthly column — and Income itself.</strong> Type a what-if
             amount and press Enter; the Difference column and the <em>Required</em> and
             <em>Remaining</em> totals reproject instantly. Income adds up across the selected
-            budgets — edit it to try one paycheck instead of two.
+            budgets — edit it to try one paycheck instead of two. Untick a category or a
+            whole group to leave it out of the math, like seeing the month without debt.
           </li>
           <li>
             <strong>Nothing is written to YNAB.</strong> Your draft is saved only in this
@@ -398,8 +463,10 @@ const monthLabel = (value: string) =>
           <h3>Required{{ totalDelta !== 0 ? ' · scenario' : '' }}</h3>
           <p>{{ fmt(requiredTotal) }}</p>
           <p class="sub">
-            <template v-if="totalDelta !== 0">goals say {{ fmt(requiredBase) }}</template>
-            <template v-else>all goals, per month</template>
+            <template v-if="excluded.length">{{ includedCount }} of {{ goalCount }} goals counted</template>
+            <template v-else>{{ goalCount }} goals</template>
+            <template v-if="totalDelta !== 0"> · goals say {{ fmt(requiredBase) }}</template>
+            <template v-else> · per month</template>
           </p>
         </article>
         <article :class="{ negative: remaining < 0 }">
@@ -414,6 +481,12 @@ const monthLabel = (value: string) =>
 
       <section class="table-wrap">
         <table>
+          <colgroup>
+            <col>
+            <col class="col-goal">
+            <col class="col-monthly">
+            <col class="col-diff">
+          </colgroup>
           <thead>
             <tr>
               <th class="name">Category</th>
@@ -427,19 +500,50 @@ const monthLabel = (value: string) =>
             </tr>
           </thead>
           <tbody v-for="section in sections" :key="section.planId">
-            <tr v-if="multiPlan" class="plan-row">
-              <th colspan="2">{{ section.planName }}</th>
+            <tr v-if="multiPlan" class="plan-row" @click="togglePlanOpen(section)">
+              <th colspan="2">
+                <button class="acc-toggle" :aria-expanded="planOpen(section)" @click.stop="togglePlanOpen(section)">
+                  <span class="chev" :class="{ open: planOpen(section) }">▸</span>
+                  {{ section.planName }}
+                </button>
+                <span v-if="!planOpen(section) && editedCount(sectionCategories(section))" class="edited-hint">
+                  {{ editedCount(sectionCategories(section)) }} edited
+                </span>
+                <span v-if="!planOpen(section) && offCount(sectionCategories(section))" class="edited-hint off-hint">
+                  {{ offCount(sectionCategories(section)) }} off
+                </span>
+              </th>
               <td class="num scenario">{{ section.detail ? fmt(sectionMonthly(section)) : '' }}</td>
               <td class="num scenario" :class="{ emphasized: sectionDelta(section) !== 0 }">
                 <template v-if="section.detail">{{ sectionDelta(section) !== 0 ? fmtDelta(sectionDelta(section)) : '—' }}</template>
               </td>
             </tr>
-            <tr v-if="!section.detail" class="plan-empty">
+            <tr v-if="!section.detail && planOpen(section)" class="plan-empty">
               <td colspan="4">No data for {{ month ? monthLabel(month) : 'this month' }} in {{ section.planName }}.</td>
             </tr>
             <template v-for="group in section.groups" :key="section.planId + group.name">
-              <tr class="group-row">
-                <th colspan="2">{{ group.name }}</th>
+              <tr v-if="planOpen(section)" class="group-row" @click="toggleGroupOpen(section, group)">
+                <th colspan="2">
+                  <label class="row-enable" @click.stop>
+                    <input
+                      type="checkbox"
+                      :checked="!groupAllOff(group)"
+                      :indeterminate.prop="groupMixed(group)"
+                      :aria-label="`Include ${group.name} in the math`"
+                      @change="toggleGroupIncluded(group)"
+                    >
+                  </label>
+                  <button class="acc-toggle" :aria-expanded="groupOpen(section, group)" @click.stop="toggleGroupOpen(section, group)">
+                    <span class="chev" :class="{ open: groupOpen(section, group) }">▸</span>
+                    {{ group.name }}
+                  </button>
+                  <span v-if="!groupOpen(section, group) && editedCount(group.categories)" class="edited-hint">
+                    {{ editedCount(group.categories) }} edited
+                  </span>
+                  <span v-if="!groupOpen(section, group) && offCount(group.categories)" class="edited-hint off-hint">
+                    {{ offCount(group.categories) }} off
+                  </span>
+                </th>
                 <td class="num scenario" :class="{ emphasized: groupDelta(group) !== 0 }">
                   {{ fmt(groupMonthly(group)) }}
                 </td>
@@ -447,8 +551,23 @@ const monthLabel = (value: string) =>
                   {{ groupDelta(group) !== 0 ? fmtDelta(groupDelta(group)) : '—' }}
                 </td>
               </tr>
-              <tr v-for="category in group.categories" :key="category.id" :class="{ changed: deltaFor(category) !== 0 }">
-                <td class="name">{{ category.name }}</td>
+              <tr
+                v-for="category in group.categories"
+                v-show="planOpen(section) && groupOpen(section, group)"
+                :key="category.id"
+                :class="{ changed: !isOff(category) && deltaFor(category) !== 0, off: isOff(category) }"
+              >
+                <td class="name">
+                  <label class="row-enable" @click.stop>
+                    <input
+                      type="checkbox"
+                      :checked="!isOff(category)"
+                      :aria-label="`Include ${category.name} in the math`"
+                      @change="setDisabled(category.id, !isOff(category))"
+                    >
+                  </label>
+                  <span class="name-text">{{ category.name }}</span>
+                </td>
                 <td class="goal">
                   <span>{{ goalLabel(category) }}</span>
                   <span v-if="category.goal_percentage_complete != null" class="goal-bar">
@@ -461,17 +580,19 @@ const monthLabel = (value: string) =>
                     step="0.01"
                     :value="toInput(draftFor(category))"
                     :aria-label="`Monthly amount for ${category.name}`"
+                    :disabled="isOff(category)"
                     @change="onAmountChange(category, $event)"
                   >
                   <button
-                    v-if="deltaFor(category) !== 0"
                     class="reset"
+                    :class="{ ghosted: isOff(category) || deltaFor(category) === 0 }"
                     :title="`Reset to the goal's ${fmt(goalMonthly(category))}`"
+                    :tabindex="isOff(category) || deltaFor(category) === 0 ? -1 : 0"
                     @click="clearDraft(category.id)"
                   >↺</button>
                 </td>
-                <td class="num scenario diff" :class="{ active: deltaFor(category) !== 0 }">
-                  {{ deltaFor(category) !== 0 ? fmtDelta(deltaFor(category)) : '—' }}
+                <td class="num scenario diff" :class="{ active: effectiveDelta(category) !== 0, 'off-diff': isOff(category) }">
+                  {{ effectiveDelta(category) !== 0 ? fmtDelta(effectiveDelta(category)) : '—' }}
                 </td>
               </tr>
             </template>
@@ -501,6 +622,14 @@ const monthLabel = (value: string) =>
             </span>
             <span class="delta">{{ fmtDelta(deltaFor(category)) }}</span>
             <button class="reset" :title="`Reset to the goal's ${fmt(goalMonthly(category))}`" @click="clearDraft(category.id)">↺</button>
+          </div>
+          <div v-for="category in excluded" :key="`off-${category.id}`" class="change-row off-change">
+            <span class="change-name">
+              <template v-if="multiPlan">{{ planNameByCategory.get(category.id) }} · </template>{{ category.category_group_name }} · {{ category.name }}
+            </span>
+            <span class="change-amounts">excluded · goal {{ fmt(goalMonthly(category)) }}</span>
+            <span class="delta">{{ fmtDelta(effectiveDelta(category)) }}</span>
+            <button class="reset" title="Include again" @click="setDisabled(category.id, false)">↺</button>
           </div>
         </div>
         <div class="changebar-row">
@@ -724,6 +853,19 @@ table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.925rem;
+  /* fixed layout + colgroup keep column widths steady as values change */
+  table-layout: fixed;
+  min-width: 44rem;
+}
+
+.col-goal { width: 12.5rem; }
+.col-monthly { width: 10.5rem; }
+.col-diff { width: 7rem; }
+
+td.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 thead th {
@@ -763,6 +905,41 @@ thead th.scenario:first-of-type,
 }
 
 thead th.scenario { color: #3f6ae0; }
+
+.plan-row, .group-row { cursor: pointer; }
+
+.acc-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-weight: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.chev {
+  display: inline-block;
+  font-size: 0.7rem;
+  color: #999;
+  transition: transform 0.15s ease;
+}
+
+.chev.open { transform: rotate(90deg); }
+
+.edited-hint {
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: #eef4ff;
+  color: #3f6ae0;
+  font-size: 0.72rem;
+  font-weight: 400;
+  white-space: nowrap;
+}
 
 .plan-row th {
   text-align: left;
@@ -810,7 +987,43 @@ th.num, td.num {
 
 tr.changed td { background: #eef4ff; }
 
-.goal { color: #777; font-size: 0.8rem; }
+.goal {
+  color: #777;
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-enable {
+  display: inline-flex;
+  margin-right: 0.45rem;
+  vertical-align: middle;
+}
+
+.row-enable input {
+  margin: 0;
+  accent-color: #4a7dff;
+  cursor: pointer;
+}
+
+tr.off td { color: #a9b0bf; }
+tr.off .goal { color: #b6bcc9; }
+tr.off .name-text {
+  text-decoration: line-through;
+  text-decoration-color: #c4cad6;
+}
+tr.off .sandbox-cell input {
+  color: #a9b0bf;
+  background: #f3f5f9;
+  border-color: #dde3f0;
+}
+tr.off .goal-bar i { background: #c3d1f4; }
+
+.reset.ghosted { visibility: hidden; }
+
+.edited-hint.off-hint { background: #f1f2f5; color: #778; }
+.off-change .change-amounts { color: #999; }
 
 .goal-bar {
   display: inline-block;
@@ -846,6 +1059,7 @@ tr.changed .sandbox-cell input { border-color: #4a7dff; }
 
 td.diff { color: #bbb; }
 td.diff.active { color: #3f6ae0; font-weight: 600; }
+td.diff.off-diff.active { color: #98a6cf; }
 
 .reset {
   margin-left: 0.35rem;

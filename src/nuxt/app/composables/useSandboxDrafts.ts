@@ -1,35 +1,46 @@
-// Draft "what if" budgeted amounts (milliunits) keyed by category id.
-// Persisted to localStorage per plan+month so tinkering survives reloads.
-// Nothing here talks to YNAB — drafts stay local until an explicit sync.
+// Draft "what if" state for the sandbox, persisted to localStorage per scope
+// (the page scopes by month): budgeted amounts in milliunits keyed by category
+// id, plus which rows are excluded from the math. Nothing here talks to YNAB —
+// drafts stay local until an explicit sync.
 export function useSandboxDrafts (scope: () => string) {
   const drafts = ref<Record<string, number>>({})
+  const disabled = ref<Record<string, boolean>>({})
 
-  const storageKey = computed(() => `ynabrr:sandbox:${scope()}`)
+  const draftsKey = computed(() => `ynabrr:sandbox:${scope()}`)
+  const disabledKey = computed(() => `ynabrr:sandbox:off:${scope()}`)
 
-  watch(storageKey, (key) => {
-    if (!import.meta.client) return
+  const readMap = <T>(key: string): T => {
     try {
-      drafts.value = JSON.parse(localStorage.getItem(key) ?? '{}')
+      return JSON.parse(localStorage.getItem(key) ?? '{}')
     } catch {
-      drafts.value = {}
+      return {} as T
     }
+  }
+
+  watch(draftsKey, () => {
+    if (!import.meta.client) return
+    drafts.value = readMap(draftsKey.value)
+    disabled.value = readMap(disabledKey.value)
   }, { immediate: true })
 
-  watch(drafts, (value) => {
+  const persist = (key: string, value: Record<string, unknown>) => {
     if (!import.meta.client) return
     try {
       if (Object.keys(value).length === 0) {
-        localStorage.removeItem(storageKey.value)
+        localStorage.removeItem(key)
       } else {
-        localStorage.setItem(storageKey.value, JSON.stringify(value))
+        localStorage.setItem(key, JSON.stringify(value))
       }
     } catch {
-      // Private windows or blocked storage — drafts just won't persist.
+      // Private windows or blocked storage — state just won't persist.
     }
-  }, { deep: true })
+  }
 
-  const setDraft = (categoryId: string, milliunits: number, liveBudgeted: number) => {
-    if (milliunits === liveBudgeted) {
+  watch(drafts, value => persist(draftsKey.value, value), { deep: true })
+  watch(disabled, value => persist(disabledKey.value, value), { deep: true })
+
+  const setDraft = (categoryId: string, milliunits: number, baseline: number) => {
+    if (milliunits === baseline) {
       delete drafts.value[categoryId]
     } else {
       drafts.value[categoryId] = milliunits
@@ -40,9 +51,18 @@ export function useSandboxDrafts (scope: () => string) {
     delete drafts.value[categoryId]
   }
 
-  const resetAll = () => {
-    drafts.value = {}
+  const setDisabled = (categoryId: string, off: boolean) => {
+    if (off) {
+      disabled.value[categoryId] = true
+    } else {
+      delete disabled.value[categoryId]
+    }
   }
 
-  return { drafts, setDraft, clearDraft, resetAll }
+  const resetAll = () => {
+    drafts.value = {}
+    disabled.value = {}
+  }
+
+  return { drafts, disabled, setDraft, clearDraft, setDisabled, resetAll }
 }
