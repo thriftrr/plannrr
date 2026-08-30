@@ -2,17 +2,16 @@
 import type { Category, MonthDetail, MonthSummary, PlanSummary } from '#shared/types/ynab'
 
 const plans = ref<PlanSummary[]>([])
-const planId = ref('')
-const months = ref<MonthSummary[]>([])
+const selectedPlanIds = ref<string[]>([])
+const monthsByPlan = ref<Record<string, MonthSummary[]>>({})
 const month = ref('')
-const detail = ref<MonthDetail | null>(null)
+const detailsByPlan = ref<Record<string, MonthDetail | null>>({})
 const loading = ref(true)
 const connectError = ref(false)
 const isMock = ref(false)
 
-const plan = computed(() => plans.value.find(item => item.id === planId.value))
-
 const INTRO_KEY = 'ynabrr:sandbox:intro'
+const SELECTED_KEY = 'ynabrr:sandbox:selected-plans'
 const showIntro = ref(false)
 const showChanges = ref(false)
 
@@ -28,7 +27,14 @@ onMounted(async () => {
     isMock.value = status.mock
     const data = await $fetch<{ plans: PlanSummary[], default_plan: PlanSummary | null }>('/api/ynab/plans')
     plans.value = data.plans
-    planId.value = (data.default_plan ?? data.plans[0])?.id ?? ''
+
+    let stored: string[] = []
+    try {
+      stored = JSON.parse(localStorage.getItem(SELECTED_KEY) ?? '[]')
+    } catch { /* fall through to the default selection */ }
+    const valid = stored.filter(id => data.plans.some(item => item.id === id))
+    const fallback = (data.default_plan ?? data.plans[0])?.id
+    selectedPlanIds.value = valid.length ? valid : (fallback ? [fallback] : [])
   } catch {
     connectError.value = true
     loading.value = false
@@ -42,42 +48,88 @@ function dismissIntro () {
   } catch { /* storage blocked — the intro will just reappear next visit */ }
 }
 
-watch(planId, async (id) => {
-  if (!id) return
-  loading.value = true
-  detail.value = null
-  try {
-    const data = await $fetch<{ months: MonthSummary[] }>(`/api/ynab/${id}/months`)
-    months.value = data.months
-    month.value = defaultMonth(data.months)
-  } catch {
-    connectError.value = true
-    loading.value = false
+function togglePlan (id: string) {
+  const current = selectedPlanIds.value
+  if (current.includes(id)) {
+    if (current.length === 1) return // always keep at least one budget selected
+    selectedPlanIds.value = current.filter(item => item !== id)
+  } else {
+    // keep the picker's order, not click order
+    selectedPlanIds.value = plans.value.map(item => item.id).filter(pid => current.includes(pid) || pid === id)
   }
-})
-
-watch(month, async (value) => {
-  if (!value || !planId.value) return
-  loading.value = true
-  detail.value = null
-  try {
-    const data = await $fetch<{ month: MonthDetail }>(`/api/ynab/${planId.value}/months/${value}`)
-    detail.value = data.month
-    connectError.value = false
-  } catch {
-    connectError.value = true
-  } finally {
-    loading.value = false
-  }
-})
-
-// Months arrive sorted newest-first; pick the current month, else the latest past one.
-function defaultMonth (list: MonthSummary[]) {
-  const today = `${new Date().toISOString().slice(0, 7)}-01`
-  return (list.find(item => item.month <= today) ?? list[0])?.month ?? ''
 }
 
-const { drafts, setDraft, clearDraft, resetAll } = useSandboxDrafts(() => `${planId.value}:${month.value}`)
+watch(selectedPlanIds, (ids) => {
+  if (!import.meta.client || !ids.length) return
+  try {
+    localStorage.setItem(SELECTED_KEY, JSON.stringify(ids))
+  } catch { /* storage blocked — selection just won't persist */ }
+})
+
+// Months arrive per plan; the picker offers the union across selected plans.
+const monthOptions = computed(() => {
+  const keys = new Set<string>()
+  for (const id of selectedPlanIds.value) {
+    for (const item of monthsByPlan.value[id] ?? []) keys.add(item.month)
+  }
+  return [...keys].sort((a, b) => b.localeCompare(a))
+})
+
+function defaultMonth (options: string[]) {
+  const today = `${new Date().toISOString().slice(0, 7)}-01`
+  return options.find(item => item <= today) ?? options[0] ?? ''
+}
+
+watch(selectedPlanIds, async (ids) => {
+  if (!ids.length) return
+  try {
+    const missing = ids.filter(id => !monthsByPlan.value[id])
+    await Promise.all(missing.map(async (id) => {
+      const data = await $fetch<{ months: MonthSummary[] }>(`/api/ynab/${id}/months`)
+      monthsByPlan.value[id] = data.months
+    }))
+    if (!month.value || !monthOptions.value.includes(month.value)) {
+      month.value = defaultMonth(monthOptions.value)
+    }
+  } catch {
+    connectError.value = true
+    loading.value = false
+  }
+})
+
+// Month details are cached per plan+month to stay friendly with YNAB's rate
+// limit; a plan without that month (e.g. an archived budget) caches as null.
+const detailCache = new Map<string, MonthDetail | null>()
+let loadToken = 0
+
+async function loadDetails () {
+  if (!month.value || !selectedPlanIds.value.length) return
+  const token = ++loadToken
+  loading.value = true
+  try {
+    const entries = await Promise.all(selectedPlanIds.value.map(async (id) => {
+      const key = `${id}:${month.value}`
+      if (!detailCache.has(key)) {
+        try {
+          const data = await $fetch<{ month: MonthDetail }>(`/api/ynab/${id}/months/${month.value}`)
+          detailCache.set(key, data.month)
+        } catch {
+          detailCache.set(key, null)
+        }
+      }
+      return [id, detailCache.get(key) ?? null] as const
+    }))
+    if (token !== loadToken) return
+    detailsByPlan.value = Object.fromEntries(entries)
+    connectError.value = false
+  } finally {
+    if (token === loadToken) loading.value = false
+  }
+}
+
+watch([selectedPlanIds, month], loadDetails)
+
+const { drafts, setDraft, clearDraft, resetAll } = useSandboxDrafts(() => month.value)
 
 // What-if income lives in the same draft map under a reserved key, so it
 // persists, resets, and scopes per month exactly like category drafts.
@@ -112,12 +164,13 @@ function goalMonthly (category: Category): number {
 }
 
 type GroupRow = { name: string, categories: Category[] }
+type PlanSection = { planId: string, planName: string, detail: MonthDetail | null, groups: GroupRow[] }
 
 // Only categories with a goal belong on this page.
-const groups = computed<GroupRow[]>(() => {
+function buildGroups (detail: MonthDetail | null): GroupRow[] {
   const rows: GroupRow[] = []
   const byName = new Map<string, GroupRow>()
-  for (const category of detail.value?.categories ?? []) {
+  for (const category of detail?.categories ?? []) {
     if (category.hidden || category.deleted || category.internal) continue
     if (!category.goal_type) continue
     const groupName = category.category_group_name ?? 'Other'
@@ -131,9 +184,36 @@ const groups = computed<GroupRow[]>(() => {
     row.categories.push(category)
   }
   return rows
-})
+}
 
-const visibleCategories = computed(() => groups.value.flatMap(group => group.categories))
+const sections = computed<PlanSection[]>(() =>
+  selectedPlanIds.value.map((id) => {
+    const detail = detailsByPlan.value[id] ?? null
+    return {
+      planId: id,
+      planName: plans.value.find(item => item.id === id)?.name ?? 'Budget',
+      detail,
+      groups: buildGroups(detail)
+    }
+  })
+)
+
+const multiPlan = computed(() => selectedPlanIds.value.length > 1)
+const hasAnyDetail = computed(() => sections.value.some(section => section.detail))
+
+const visibleCategories = computed(() =>
+  sections.value.flatMap(section => section.groups.flatMap(group => group.categories))
+)
+
+const planNameByCategory = computed(() => {
+  const map = new Map<string, string>()
+  for (const section of sections.value) {
+    for (const group of section.groups) {
+      for (const category of group.categories) map.set(category.id, section.planName)
+    }
+  }
+  return map
+})
 
 const draftFor = (category: Category) => drafts.value[category.id] ?? goalMonthly(category)
 const deltaFor = (category: Category) => draftFor(category) - goalMonthly(category)
@@ -146,7 +226,9 @@ const totalDelta = computed(() =>
   changes.value.reduce((sum, category) => sum + deltaFor(category), 0)
 )
 
-const incomeLive = computed(() => detail.value?.income ?? 0)
+const incomeLive = computed(() =>
+  sections.value.reduce((sum, section) => sum + (section.detail?.income ?? 0), 0)
+)
 const income = computed(() => drafts.value[INCOME_KEY] ?? incomeLive.value)
 const incomeDelta = computed(() => income.value - incomeLive.value)
 
@@ -162,11 +244,16 @@ const remaining = computed(() => income.value - requiredTotal.value)
 
 const groupMonthly = (group: GroupRow) => group.categories.reduce((sum, category) => sum + draftFor(category), 0)
 const groupDelta = (group: GroupRow) => group.categories.reduce((sum, category) => sum + deltaFor(category), 0)
+const sectionMonthly = (section: PlanSection) => section.groups.reduce((sum, group) => sum + groupMonthly(group), 0)
+const sectionDelta = (section: PlanSection) => section.groups.reduce((sum, group) => sum + groupDelta(group), 0)
 
-const formatter = computed(() => new Intl.NumberFormat('en-US', {
-  style: 'currency',
-  currency: plan.value?.currency_format?.iso_code || 'USD'
-}))
+const formatter = computed(() => {
+  const first = plans.value.find(item => item.id === selectedPlanIds.value[0])
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: first?.currency_format?.iso_code || 'USD'
+  })
+})
 const fmt = (milliunits: number) => formatter.value.format(milliunits / 1000)
 const fmtDelta = (milliunits: number) => `${milliunits > 0 ? '+' : '−'}${fmt(Math.abs(milliunits))}`
 
@@ -214,36 +301,51 @@ const monthLabel = (value: string) =>
       <div>
         <h1><NuxtLink to="/">YNABRR</NuxtLink> <span class="crumb">/ Sandbox</span></h1>
         <p class="tagline">
-          Every goal in your plan and its monthly cost — tweak the amounts and
-          see how the month fits inside your income.
+          Every goal across your budgets and its monthly cost — tweak the
+          amounts and see how the month fits inside your income.
         </p>
       </div>
       <div class="pickers">
         <button v-if="!showIntro" class="howto" @click="showIntro = true">How this works</button>
         <span v-if="isMock" class="badge" title="Serving built-in sample data — no YNAB account is being read">Mock data</span>
-        <select v-if="plans.length > 1" v-model="planId" aria-label="Plan">
-          <option v-for="item in plans" :key="item.id" :value="item.id">{{ item.name }}</option>
-        </select>
-        <select v-if="months.length" v-model="month" aria-label="Month">
-          <option v-for="item in months" :key="item.month" :value="item.month">{{ monthLabel(item.month) }}</option>
+        <select v-if="monthOptions.length" v-model="month" aria-label="Month">
+          <option v-for="item in monthOptions" :key="item" :value="item">{{ monthLabel(item) }}</option>
         </select>
       </div>
     </header>
+
+    <div v-if="plans.length > 1" class="plan-picker" role="group" aria-label="Budgets to tinker with">
+      <span class="picker-label">Tinkrr with</span>
+      <label
+        v-for="item in plans"
+        :key="item.id"
+        class="pill"
+        :class="{ on: selectedPlanIds.includes(item.id) }"
+      >
+        <input
+          type="checkbox"
+          :checked="selectedPlanIds.includes(item.id)"
+          @change="togglePlan(item.id)"
+        >
+        {{ item.name }}
+      </label>
+    </div>
 
     <section v-if="showIntro" class="intro">
       <div>
         <h2>How the sandbox works</h2>
         <ol>
           <li>
-            <strong>Every category with a goal shows up here</strong> with its monthly cost,
-            worked out from the goal — a $1,200-by-November goal becomes its monthly pace.
-            Categories without goals stay off this page.
+            <strong>Pick the budgets to tinker with.</strong> Every category with a goal from
+            each selected budget shows up here with its monthly cost, worked out from the goal
+            — a $1,200-by-November goal becomes its monthly pace. Categories without goals
+            stay off this page.
           </li>
           <li>
             <strong>Tweak the Monthly column — and Income itself.</strong> Type a what-if
             amount and press Enter; the Difference column and the <em>Required</em> and
-            <em>Remaining</em> totals reproject instantly. Try one paycheck instead of two
-            by editing the Income card.
+            <em>Remaining</em> totals reproject instantly. Income adds up across the selected
+            budgets — edit it to try one paycheck instead of two.
           </li>
           <li>
             <strong>Nothing is written to YNAB.</strong> Your draft is saved only in this
@@ -264,7 +366,7 @@ const monthLabel = (value: string) =>
       </p>
     </section>
 
-    <p v-else-if="loading || !detail" class="status">Loading plan…</p>
+    <p v-else-if="loading && !hasAnyDetail" class="status">Loading plans…</p>
 
     <template v-else>
       <section class="stats">
@@ -288,6 +390,7 @@ const monthLabel = (value: string) =>
           </p>
           <p class="sub">
             <template v-if="incomeDelta !== 0">YNAB says {{ fmt(incomeLive) }}</template>
+            <template v-else-if="multiPlan">across {{ selectedPlanIds.length }} budgets · edit for a what-if</template>
             <template v-else>from YNAB · edit to try a what-if</template>
           </p>
         </article>
@@ -323,47 +426,59 @@ const monthLabel = (value: string) =>
               </th>
             </tr>
           </thead>
-          <tbody v-for="group in groups" :key="group.name">
-            <tr class="group-row">
-              <th colspan="2">{{ group.name }}</th>
-              <td class="num scenario" :class="{ emphasized: groupDelta(group) !== 0 }">
-                {{ fmt(groupMonthly(group)) }}
-              </td>
-              <td class="num scenario" :class="{ emphasized: groupDelta(group) !== 0 }">
-                {{ groupDelta(group) !== 0 ? fmtDelta(groupDelta(group)) : '—' }}
+          <tbody v-for="section in sections" :key="section.planId">
+            <tr v-if="multiPlan" class="plan-row">
+              <th colspan="2">{{ section.planName }}</th>
+              <td class="num scenario">{{ section.detail ? fmt(sectionMonthly(section)) : '' }}</td>
+              <td class="num scenario" :class="{ emphasized: sectionDelta(section) !== 0 }">
+                <template v-if="section.detail">{{ sectionDelta(section) !== 0 ? fmtDelta(sectionDelta(section)) : '—' }}</template>
               </td>
             </tr>
-            <tr v-for="category in group.categories" :key="category.id" :class="{ changed: deltaFor(category) !== 0 }">
-              <td class="name">{{ category.name }}</td>
-              <td class="goal">
-                <span>{{ goalLabel(category) }}</span>
-                <span v-if="category.goal_percentage_complete != null" class="goal-bar">
-                  <i :style="{ width: `${Math.min(category.goal_percentage_complete, 100)}%` }" />
-                </span>
-              </td>
-              <td class="num scenario sandbox-cell">
-                <input
-                  type="number"
-                  step="0.01"
-                  :value="toInput(draftFor(category))"
-                  :aria-label="`Monthly amount for ${category.name}`"
-                  @change="onAmountChange(category, $event)"
-                >
-                <button
-                  v-if="deltaFor(category) !== 0"
-                  class="reset"
-                  :title="`Reset to the goal's ${fmt(goalMonthly(category))}`"
-                  @click="clearDraft(category.id)"
-                >↺</button>
-              </td>
-              <td class="num scenario diff" :class="{ active: deltaFor(category) !== 0 }">
-                {{ deltaFor(category) !== 0 ? fmtDelta(deltaFor(category)) : '—' }}
-              </td>
+            <tr v-if="!section.detail" class="plan-empty">
+              <td colspan="4">No data for {{ month ? monthLabel(month) : 'this month' }} in {{ section.planName }}.</td>
             </tr>
+            <template v-for="group in section.groups" :key="section.planId + group.name">
+              <tr class="group-row">
+                <th colspan="2">{{ group.name }}</th>
+                <td class="num scenario" :class="{ emphasized: groupDelta(group) !== 0 }">
+                  {{ fmt(groupMonthly(group)) }}
+                </td>
+                <td class="num scenario" :class="{ emphasized: groupDelta(group) !== 0 }">
+                  {{ groupDelta(group) !== 0 ? fmtDelta(groupDelta(group)) : '—' }}
+                </td>
+              </tr>
+              <tr v-for="category in group.categories" :key="category.id" :class="{ changed: deltaFor(category) !== 0 }">
+                <td class="name">{{ category.name }}</td>
+                <td class="goal">
+                  <span>{{ goalLabel(category) }}</span>
+                  <span v-if="category.goal_percentage_complete != null" class="goal-bar">
+                    <i :style="{ width: `${Math.min(category.goal_percentage_complete, 100)}%` }" />
+                  </span>
+                </td>
+                <td class="num scenario sandbox-cell">
+                  <input
+                    type="number"
+                    step="0.01"
+                    :value="toInput(draftFor(category))"
+                    :aria-label="`Monthly amount for ${category.name}`"
+                    @change="onAmountChange(category, $event)"
+                  >
+                  <button
+                    v-if="deltaFor(category) !== 0"
+                    class="reset"
+                    :title="`Reset to the goal's ${fmt(goalMonthly(category))}`"
+                    @click="clearDraft(category.id)"
+                  >↺</button>
+                </td>
+                <td class="num scenario diff" :class="{ active: deltaFor(category) !== 0 }">
+                  {{ deltaFor(category) !== 0 ? fmtDelta(deltaFor(category)) : '—' }}
+                </td>
+              </tr>
+            </template>
           </tbody>
         </table>
-        <p v-if="detail && !visibleCategories.length" class="status">
-          No categories with goals in this month. Add goals in YNAB and they'll show up here.
+        <p v-if="!loading && hasAnyDetail && !visibleCategories.length" class="status">
+          No categories with goals in the selected budgets this month. Add goals in YNAB and they'll show up here.
         </p>
       </section>
 
@@ -378,7 +493,9 @@ const monthLabel = (value: string) =>
             <button class="reset" :title="`Reset to YNAB's ${fmt(incomeLive)}`" @click="clearDraft(INCOME_KEY)">↺</button>
           </div>
           <div v-for="category in changes" :key="category.id" class="change-row">
-            <span class="change-name">{{ category.category_group_name }} · {{ category.name }}</span>
+            <span class="change-name">
+              <template v-if="multiPlan">{{ planNameByCategory.get(category.id) }} · </template>{{ category.category_group_name }} · {{ category.name }}
+            </span>
             <span class="change-amounts">
               {{ fmt(goalMonthly(category)) }} → <strong>{{ fmt(draftFor(category)) }}</strong>
             </span>
@@ -464,6 +581,47 @@ const monthLabel = (value: string) =>
   border: 1px solid #ffe08a;
   color: #7a5d00;
   font-size: 0.8rem;
+}
+
+.plan-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 1rem;
+}
+
+.picker-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #777;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.8rem;
+  border: 1px solid #ccc;
+  border-radius: 999px;
+  background: #fff;
+  font-size: 0.875rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.pill input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.pill.on {
+  border-color: #4a7dff;
+  background: #eef4ff;
+  color: #2b52c7;
 }
 
 .intro {
@@ -599,11 +757,32 @@ td.scenario, th.scenario {
 
 td.sandbox-cell,
 thead th.scenario:first-of-type,
+.plan-row td.scenario:first-of-type,
 .group-row td.scenario:first-of-type {
   border-left: 1px solid #dbe4ff;
 }
 
 thead th.scenario { color: #3f6ae0; }
+
+.plan-row th {
+  text-align: left;
+  padding-top: 1.6rem;
+  font-size: 0.95rem;
+  border-bottom: 2px solid #ddd;
+}
+
+.plan-row td {
+  padding-top: 1.6rem;
+  font-size: 0.85rem;
+  color: #888;
+  border-bottom: 2px solid #ddd;
+}
+
+.plan-empty td {
+  color: #999;
+  font-size: 0.85rem;
+  font-style: italic;
+}
 
 .group-row th {
   text-align: left;
@@ -617,6 +796,7 @@ thead th.scenario { color: #3f6ae0; }
   font-size: 0.85rem;
 }
 
+.plan-row td.emphasized,
 .group-row td.emphasized {
   color: #3f6ae0;
   font-weight: 600;
