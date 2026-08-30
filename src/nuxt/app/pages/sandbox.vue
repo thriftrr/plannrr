@@ -16,6 +16,7 @@ const COLLAPSED_PLANS_KEY = 'ynabrr:sandbox:collapsed-plans'
 const COLLAPSED_GROUPS_KEY = 'ynabrr:sandbox:collapsed-groups'
 const showIntro = ref(false)
 const showChanges = ref(false)
+const filter = ref('')
 const collapsedPlans = ref<Record<string, boolean>>({})
 const collapsedGroups = ref<Record<string, boolean>>({})
 
@@ -242,6 +243,18 @@ const planNameByCategory = computed(() => {
   return map
 })
 
+// Category name filter — a view aid only; totals and rollups ignore it, and
+// while it's active it overrides the accordions so matches always surface.
+const filterNeedle = computed(() => filter.value.trim().toLowerCase())
+const filterActive = computed(() => filterNeedle.value !== '')
+const matchesFilter = (category: Category) =>
+  !filterActive.value ||
+  category.name.toLowerCase().includes(filterNeedle.value) ||
+  (category.category_group_name ?? '').toLowerCase().includes(filterNeedle.value)
+const groupHasMatch = (group: GroupRow) => group.categories.some(matchesFilter)
+const sectionHasMatch = (section: PlanSection) => section.groups.some(groupHasMatch)
+const anyFilterMatch = computed(() => sections.value.some(sectionHasMatch))
+
 const draftFor = (category: Category) => drafts.value[category.id] ?? goalMonthly(category)
 const deltaFor = (category: Category) => draftFor(category) - goalMonthly(category)
 
@@ -377,6 +390,14 @@ const monthLabel = (value: string) =>
       <div class="pickers">
         <button v-if="!showIntro" class="howto" @click="showIntro = true">How this works</button>
         <span v-if="isMock" class="badge" title="Serving built-in sample data — no YNAB account is being read">Mock data</span>
+        <input
+          v-model="filter"
+          type="search"
+          class="filter-input"
+          placeholder="Filter categories…"
+          aria-label="Filter categories by name"
+          @keyup.escape="filter = ''"
+        >
         <select v-if="monthOptions.length" v-model="month" aria-label="Month">
           <option v-for="item in monthOptions" :key="item" :value="item">{{ monthLabel(item) }}</option>
         </select>
@@ -505,7 +526,7 @@ const monthLabel = (value: string) =>
             </tr>
           </thead>
           <tbody v-for="section in sections" :key="section.planId">
-            <tr v-if="multiPlan" class="plan-row" @click="togglePlanOpen(section)">
+            <tr v-if="multiPlan && (!filterActive || sectionHasMatch(section))" class="plan-row" @click="togglePlanOpen(section)">
               <th>
                 <button class="acc-toggle" :aria-expanded="planOpen(section)" @click.stop="togglePlanOpen(section)">
                   <span class="chev" :class="{ open: planOpen(section) }">▸</span>
@@ -526,11 +547,11 @@ const monthLabel = (value: string) =>
                 <template v-if="section.detail">{{ sectionDelta(section) !== 0 ? fmtDelta(sectionDelta(section)) : '—' }}</template>
               </td>
             </tr>
-            <tr v-if="!section.detail && planOpen(section)" class="plan-empty">
+            <tr v-if="!filterActive && !section.detail && planOpen(section)" class="plan-empty">
               <td colspan="4">No data for {{ month ? monthLabel(month) : 'this month' }} in {{ section.planName }}.</td>
             </tr>
             <template v-for="group in section.groups" :key="section.planId + group.name">
-              <tr v-if="planOpen(section)" class="group-row" @click="toggleGroupOpen(section, group)">
+              <tr v-if="filterActive ? groupHasMatch(group) : planOpen(section)" class="group-row" @click="toggleGroupOpen(section, group)">
                 <th>
                   <label class="row-enable" @click.stop>
                     <input
@@ -562,7 +583,7 @@ const monthLabel = (value: string) =>
               </tr>
               <tr
                 v-for="category in group.categories"
-                v-show="planOpen(section) && groupOpen(section, group)"
+                v-show="filterActive ? matchesFilter(category) : (planOpen(section) && groupOpen(section, group))"
                 :key="category.id"
                 :class="{ changed: !isOff(category) && deltaFor(category) !== 0, off: isOff(category) }"
               >
@@ -609,6 +630,9 @@ const monthLabel = (value: string) =>
         </table>
         <p v-if="!loading && hasAnyDetail && !visibleCategories.length" class="status">
           No categories with goals in the selected budgets this month. Add goals in YNAB and they'll show up here.
+        </p>
+        <p v-if="filterActive && !anyFilterMatch" class="status">
+          No categories match “{{ filter.trim() }}”.
         </p>
       </section>
 
@@ -699,6 +723,20 @@ const monthLabel = (value: string) =>
   border-radius: 6px;
   background: #fff;
   font: inherit;
+}
+
+.filter-input {
+  width: 12rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  font: inherit;
+}
+
+.filter-input:focus {
+  border-color: #4a7dff;
+  outline: none;
 }
 
 .howto {
