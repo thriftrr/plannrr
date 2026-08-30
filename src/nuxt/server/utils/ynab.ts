@@ -8,7 +8,12 @@ type YnabFetchOptions = {
 }
 
 export async function ynabFetch<T> (path: string, options: YnabFetchOptions = {}): Promise<T> {
-  const { ynabPersonalAccessToken } = useRuntimeConfig()
+  const { ynabPersonalAccessToken, ynabMock } = useRuntimeConfig()
+
+  // Mock mode short-circuits before any network call or token use.
+  if (ynabMock) {
+    return resolveYnabMock(path) as T
+  }
 
   if (!ynabPersonalAccessToken) {
     throw createError({

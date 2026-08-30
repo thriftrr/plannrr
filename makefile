@@ -5,3 +5,6 @@ build:
 
 up:
 	cd src/nuxt && npm run dev
+
+up-mock:
+	cd src/nuxt && npm run dev:mock

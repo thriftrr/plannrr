@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ynabrr-mock",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "src/nuxt", "run", "dev:mock"],
+      "port": 3000,
+      "autoPort": true
+    }
+  ]
+}

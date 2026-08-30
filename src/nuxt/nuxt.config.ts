@@ -20,6 +20,8 @@ export default defineNuxtConfig({
 
   runtimeConfig: {
     // set via NUXT_YNAB_PERSONAL_ACCESS_TOKEN — server-only, never exposed to the client
-    ynabPersonalAccessToken: ''
+    ynabPersonalAccessToken: '',
+    // set NUXT_YNAB_MOCK=1 to serve built-in fixtures instead of calling YNAB
+    ynabMock: ''
   }
 })

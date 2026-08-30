@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { PlanSummary } from '~~/server/api/ynab/plans.get'
+import type { PlanSummary } from '#shared/types/ynab'
 
 const { data, error, status } = await useFetch<{ plans: PlanSummary[] }>('/api/ynab/plans', {
   lazy: true
@@ -31,7 +31,7 @@ const { data, error, status } = await useFetch<{ plans: PlanSummary[] }>('/api/y
 
     <section class="ideas">
       <article>
-        <h2>Budget sandbox</h2>
+        <h2><NuxtLink to="/sandbox">Budget sandbox →</NuxtLink></h2>
         <p>
           Pull categories, spending, and goals. Play out scenarios — live off one
           paycheck, send everything else to debt — then sync the plan back to YNAB.
