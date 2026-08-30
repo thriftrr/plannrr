@@ -284,6 +284,11 @@ const remaining = computed(() => income.value - requiredTotal.value)
 
 const groupMonthly = (group: GroupRow) => group.categories.reduce((sum, category) => sum + effectiveMonthly(category), 0)
 const groupDelta = (group: GroupRow) => group.categories.reduce((sum, category) => sum + effectiveDelta(category), 0)
+
+// Goal rollups are the stable baseline — edits and exclusions never move them,
+// so Goal − Monthly always reconciles with Difference.
+const groupGoal = (group: GroupRow) => group.categories.reduce((sum, category) => sum + goalMonthly(category), 0)
+const sectionGoal = (section: PlanSection) => section.groups.reduce((sum, group) => sum + groupGoal(group), 0)
 const sectionMonthly = (section: PlanSection) => section.groups.reduce((sum, group) => sum + groupMonthly(group), 0)
 const sectionDelta = (section: PlanSection) => section.groups.reduce((sum, group) => sum + groupDelta(group), 0)
 const sectionCategories = (section: PlanSection) => section.groups.flatMap(group => group.categories)
@@ -491,7 +496,7 @@ const monthLabel = (value: string) =>
             <tr>
               <th class="name">Category</th>
               <th class="goal">Goal</th>
-              <th class="num scenario" title="Your what-if monthly amount — starts at the goal's monthly cost; nothing is sent to YNAB">
+              <th class="num scenario sep" title="Your what-if monthly amount — starts at the goal's monthly cost; nothing is sent to YNAB">
                 Monthly <span class="th-hint">editable · stays local</span>
               </th>
               <th class="num scenario" title="Your monthly amount minus the goal's monthly cost">
@@ -501,7 +506,7 @@ const monthLabel = (value: string) =>
           </thead>
           <tbody v-for="section in sections" :key="section.planId">
             <tr v-if="multiPlan" class="plan-row" @click="togglePlanOpen(section)">
-              <th colspan="2">
+              <th>
                 <button class="acc-toggle" :aria-expanded="planOpen(section)" @click.stop="togglePlanOpen(section)">
                   <span class="chev" :class="{ open: planOpen(section) }">▸</span>
                   {{ section.planName }}
@@ -513,7 +518,10 @@ const monthLabel = (value: string) =>
                   {{ offCount(sectionCategories(section)) }} off
                 </span>
               </th>
-              <td class="num scenario">{{ section.detail ? fmt(sectionMonthly(section)) : '' }}</td>
+              <td class="goal">
+                <template v-if="section.detail">{{ fmt(sectionGoal(section)) }} / month</template>
+              </td>
+              <td class="num scenario sep">{{ section.detail ? fmt(sectionMonthly(section)) : '' }}</td>
               <td class="num scenario" :class="{ emphasized: sectionDelta(section) !== 0 }">
                 <template v-if="section.detail">{{ sectionDelta(section) !== 0 ? fmtDelta(sectionDelta(section)) : '—' }}</template>
               </td>
@@ -523,7 +531,7 @@ const monthLabel = (value: string) =>
             </tr>
             <template v-for="group in section.groups" :key="section.planId + group.name">
               <tr v-if="planOpen(section)" class="group-row" @click="toggleGroupOpen(section, group)">
-                <th colspan="2">
+                <th>
                   <label class="row-enable" @click.stop>
                     <input
                       type="checkbox"
@@ -544,7 +552,8 @@ const monthLabel = (value: string) =>
                     {{ offCount(group.categories) }} off
                   </span>
                 </th>
-                <td class="num scenario" :class="{ emphasized: groupDelta(group) !== 0 }">
+                <td class="goal">{{ fmt(groupGoal(group)) }} / month</td>
+                <td class="num scenario sep" :class="{ emphasized: groupDelta(group) !== 0 }">
                   {{ fmt(groupMonthly(group)) }}
                 </td>
                 <td class="num scenario" :class="{ emphasized: groupDelta(group) !== 0 }">
@@ -898,9 +907,8 @@ td.scenario, th.scenario {
 }
 
 td.sandbox-cell,
-thead th.scenario:first-of-type,
-.plan-row td.scenario:first-of-type,
-.group-row td.scenario:first-of-type {
+th.sep,
+td.sep {
   border-left: 1px solid #dbe4ff;
 }
 
