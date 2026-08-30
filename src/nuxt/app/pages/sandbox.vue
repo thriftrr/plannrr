@@ -14,9 +14,13 @@ const INTRO_KEY = 'ynabrr:sandbox:intro'
 const SELECTED_KEY = 'ynabrr:sandbox:selected-plans'
 const COLLAPSED_PLANS_KEY = 'ynabrr:sandbox:collapsed-plans'
 const COLLAPSED_GROUPS_KEY = 'ynabrr:sandbox:collapsed-groups'
+const LAYOUT_KEY = 'ynabrr:sandbox:layout'
 const showIntro = ref(false)
 const showChanges = ref(false)
 const filter = ref('')
+// Row arrangement from drag & drop: ordered category ids per plan:group.
+// A layout preference, so it's global — not part of the per-month scenario.
+const rowOrder = ref<Record<string, string[]>>({})
 const collapsedPlans = ref<Record<string, boolean>>({})
 const collapsedGroups = ref<Record<string, boolean>>({})
 
@@ -25,6 +29,7 @@ onMounted(async () => {
     showIntro.value = localStorage.getItem(INTRO_KEY) !== 'dismissed'
     collapsedPlans.value = JSON.parse(localStorage.getItem(COLLAPSED_PLANS_KEY) ?? '{}')
     collapsedGroups.value = JSON.parse(localStorage.getItem(COLLAPSED_GROUPS_KEY) ?? '{}')
+    rowOrder.value = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? '{}')
   } catch {
     showIntro.value = true
   }
@@ -86,6 +91,17 @@ watch(collapsedGroups, (value) => {
     localStorage.setItem(COLLAPSED_GROUPS_KEY, JSON.stringify(value))
   } catch { /* storage blocked — accordion state just won't persist */ }
 }, { deep: true })
+
+watch(rowOrder, (value) => {
+  if (!import.meta.client) return
+  try {
+    if (Object.keys(value).length === 0) localStorage.removeItem(LAYOUT_KEY)
+    else localStorage.setItem(LAYOUT_KEY, JSON.stringify(value))
+  } catch { /* storage blocked — layout just won't persist */ }
+}, { deep: true })
+
+const layoutCustomized = computed(() => Object.keys(rowOrder.value).length > 0)
+const resetLayout = () => { rowOrder.value = {} }
 
 // Months arrive per plan; the picker offers the union across selected plans.
 const monthOptions = computed(() => {
@@ -261,6 +277,47 @@ function withCustomRows (planId: string, groups: GroupRow[]): GroupRow[] {
   return groups
 }
 
+// Re-bucket and re-order categories according to saved drag & drop layout.
+// A group's saved id list claims its members; unclaimed categories stay in
+// their natural group, and groups left empty by moves are dropped.
+function applyLayout (planId: string, groups: GroupRow[]): GroupRow[] {
+  const hasLayout = Object.keys(rowOrder.value).some(key => key.startsWith(`${planId}:`))
+  if (!hasLayout) return groups
+
+  const byId = new Map<string, Category>()
+  for (const group of groups) {
+    for (const category of group.categories) byId.set(category.id, category)
+  }
+
+  const claimed = new Set<string>()
+  for (const group of groups) {
+    const order = rowOrder.value[`${planId}:${group.name}`]
+    if (!order) continue
+    for (const id of order) {
+      if (byId.has(id)) claimed.add(id)
+    }
+  }
+
+  const result: GroupRow[] = []
+  for (const group of groups) {
+    const order = rowOrder.value[`${planId}:${group.name}`]
+    let categories: Category[]
+    if (order) {
+      categories = order.filter(id => byId.has(id)).map(id => byId.get(id)!)
+      for (const category of group.categories) {
+        if (!claimed.has(category.id)) categories.push(category)
+      }
+    } else {
+      categories = group.categories.filter(category => !claimed.has(category.id))
+    }
+    categories = categories.map(category =>
+      category.category_group_name === group.name ? category : { ...category, category_group_name: group.name }
+    )
+    if (categories.length) result.push({ name: group.name, categories })
+  }
+  return result
+}
+
 const sections = computed<PlanSection[]>(() =>
   selectedPlanIds.value.map((id) => {
     const detail = detailsByPlan.value[id] ?? null
@@ -268,7 +325,7 @@ const sections = computed<PlanSection[]>(() =>
       planId: id,
       planName: plans.value.find(item => item.id === id)?.name ?? 'Budget',
       detail,
-      groups: detail ? withCustomRows(id, buildGroups(detail)) : []
+      groups: detail ? applyLayout(id, withCustomRows(id, buildGroups(detail))) : []
     }
   })
 )
@@ -388,7 +445,73 @@ const formatter = computed(() => {
 const fmt = (milliunits: number) => formatter.value.format(milliunits / 1000)
 const fmtDelta = (milliunits: number) => `${milliunits > 0 ? '+' : '−'}${fmt(Math.abs(milliunits))}`
 
-const toInput = (milliunits: number) => Number((milliunits / 1000).toFixed(2))
+function selectAll (event: Event) {
+  (event.target as HTMLInputElement).select()
+}
+
+// ---- Drag & drop ----------------------------------------------------------
+// Drag a row's handle onto another row (insert before it) or a group header
+// (append). Moves stay inside one budget; the layout persists globally.
+
+const dragging = ref<{ id: string, planId: string } | null>(null)
+const dropBeforeId = ref<string | null>(null)
+const dropGroupKey = ref<string | null>(null)
+
+function moveCategory (categoryId: string, planId: string, targetGroup: string, beforeId: string | null) {
+  const section = sections.value.find(item => item.planId === planId)
+  if (!section) return
+  const snapshot: Record<string, string[]> = {}
+  for (const group of section.groups) {
+    snapshot[group.name] = group.categories.map(category => category.id).filter(id => id !== categoryId)
+  }
+  const target = snapshot[targetGroup]
+  if (!target) return
+  const index = beforeId ? target.indexOf(beforeId) : -1
+  if (index >= 0) target.splice(index, 0, categoryId)
+  else target.push(categoryId)
+  for (const [name, ids] of Object.entries(snapshot)) {
+    rowOrder.value[`${planId}:${name}`] = ids
+  }
+  const customRow = custom.value[categoryId]
+  if (customRow) customRow.groupName = targetGroup
+}
+
+function onDragStart (section: PlanSection, category: Category, event: DragEvent) {
+  dragging.value = { id: category.id, planId: section.planId }
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+}
+
+function onDragEnd () {
+  dragging.value = null
+  dropBeforeId.value = null
+  dropGroupKey.value = null
+}
+
+function onRowDragOver (section: PlanSection, category: Category, event: DragEvent) {
+  if (!dragging.value || dragging.value.planId !== section.planId || dragging.value.id === category.id) return
+  event.preventDefault()
+  dropBeforeId.value = category.id
+  dropGroupKey.value = null
+}
+
+function onRowDrop (section: PlanSection, group: GroupRow, category: Category) {
+  if (!dragging.value) return
+  moveCategory(dragging.value.id, section.planId, group.name, category.id)
+  onDragEnd()
+}
+
+function onGroupDragOver (section: PlanSection, group: GroupRow, event: DragEvent) {
+  if (!dragging.value || dragging.value.planId !== section.planId) return
+  event.preventDefault()
+  dropBeforeId.value = null
+  dropGroupKey.value = `${section.planId}:${group.name}`
+}
+
+function onGroupDrop (section: PlanSection, group: GroupRow) {
+  if (!dragging.value) return
+  moveCategory(dragging.value.id, section.planId, group.name, null)
+  onDragEnd()
+}
 
 // Amount fields accept YNAB-style math ("+200", "1200/12"); after evaluating
 // we write the normalized number back into the field ourselves, since Vue
@@ -397,14 +520,14 @@ function onAmountChange (category: Category, event: Event) {
   const target = event.target as HTMLInputElement
   if (!target.value.trim()) {
     clearDraft(category.id)
-    target.value = String(toInput(draftFor(category)))
+    target.value = fmt(draftFor(category))
     return
   }
   const result = evaluateAmountExpression(target.value, draftFor(category) / 1000)
   if (result !== null) {
     setDraft(category.id, Math.round(result * 1000), goalMonthly(category))
   }
-  target.value = String(toInput(draftFor(category)))
+  target.value = fmt(draftFor(category))
 }
 
 function blurOnEnter (event: Event) {
@@ -424,14 +547,14 @@ function onIncomeChange (event: Event) {
   const target = event.target as HTMLInputElement
   if (!target.value.trim()) {
     clearDraft(INCOME_KEY)
-    target.value = String(toInput(income.value))
+    target.value = fmt(income.value)
     return
   }
   const result = evaluateAmountExpression(target.value, income.value / 1000)
   if (result !== null) {
     setDraft(INCOME_KEY, Math.round(result * 1000), incomeLive.value)
   }
-  target.value = String(toInput(income.value))
+  target.value = fmt(income.value)
 }
 
 // ---- CSV export -----------------------------------------------------------
@@ -516,6 +639,7 @@ const monthLabel = (value: string) =>
         </p>
       </div>
       <div class="pickers">
+        <button v-if="layoutCustomized" class="howto" title="Undo drag & drop rearrangement" @click="resetLayout">Reset layout</button>
         <button v-if="!showIntro" class="howto" @click="showIntro = true">How this works</button>
         <span v-if="isMock" class="badge" title="Serving built-in sample data — no YNAB account is being read">Mock data</span>
         <input
@@ -603,10 +727,11 @@ const monthLabel = (value: string) =>
             <input
               type="text"
               inputmode="decimal"
-              :value="toInput(income)"
+              :value="fmt(income)"
               aria-label="What-if income for this month"
               title="Edit to try a what-if income — does math too: +1000, /2, 3250*2. Nothing is sent to YNAB"
               @change="onIncomeChange"
+              @focus="selectAll"
               @keydown.enter="blurOnEnter"
             >
             <button
@@ -688,7 +813,14 @@ const monthLabel = (value: string) =>
               <td colspan="4">No data for {{ month ? monthLabel(month) : 'this month' }} in {{ section.planName }}.</td>
             </tr>
             <template v-for="group in section.groups" :key="section.planId + group.name">
-              <tr v-if="filterActive ? groupHasMatch(group) : planOpen(section)" class="group-row" @click="toggleGroupOpen(section, group)">
+              <tr
+                v-if="filterActive ? groupHasMatch(group) : planOpen(section)"
+                class="group-row"
+                :class="{ 'drop-into': dropGroupKey === `${section.planId}:${group.name}` }"
+                @click="toggleGroupOpen(section, group)"
+                @dragover="onGroupDragOver(section, group, $event)"
+                @drop="onGroupDrop(section, group)"
+              >
                 <th>
                   <label class="row-enable" @click.stop>
                     <input
@@ -722,9 +854,19 @@ const monthLabel = (value: string) =>
                 v-for="category in group.categories"
                 v-show="filterActive ? matchesFilter(category) : (planOpen(section) && groupOpen(section, group))"
                 :key="category.id"
-                :class="{ changed: !isOff(category) && deltaFor(category) !== 0, off: isOff(category) }"
+                :class="{ changed: !isOff(category) && deltaFor(category) !== 0, off: isOff(category), 'drop-before': dropBeforeId === category.id }"
+                @dragover="onRowDragOver(section, category, $event)"
+                @drop="onRowDrop(section, group, category)"
               >
                 <td class="name">
+                  <span
+                    v-if="!filterActive"
+                    class="drag-handle"
+                    draggable="true"
+                    title="Drag to move this row"
+                    @dragstart="onDragStart(section, category, $event)"
+                    @dragend="onDragEnd"
+                  >⠿</span>
                   <label class="row-enable" @click.stop>
                     <input
                       type="checkbox"
@@ -758,11 +900,12 @@ const monthLabel = (value: string) =>
                   <input
                     type="text"
                     inputmode="decimal"
-                    :value="toInput(draftFor(category))"
+                    :value="fmt(draftFor(category))"
                     :aria-label="`Monthly amount for ${category.name}`"
                     :disabled="isOff(category)"
                     title="Does math: 100+50, +200, -.37, *2, 1200/12 — Enter to apply"
                     @change="onAmountChange(category, $event)"
+                    @focus="selectAll"
                     @keydown.enter="blurOnEnter"
                   >
                   <button
@@ -1231,7 +1374,27 @@ thead th.scenario { color: #3f6ae0; }
   vertical-align: bottom;
 }
 
-td.name { padding-left: 2.4rem; }
+td.name {
+  position: relative;
+  padding-left: 2.4rem;
+}
+
+.drag-handle {
+  position: absolute;
+  left: 1.05rem;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: grab;
+  color: #c2c7d2;
+  font-size: 0.8rem;
+  opacity: 0;
+}
+
+tbody tr:hover .drag-handle { opacity: 1; }
+.drag-handle:active { cursor: grabbing; }
+
+tr.drop-before td { box-shadow: inset 0 2px 0 #4a7dff; }
+.group-row.drop-into th, .group-row.drop-into td { background: #eef4ff; }
 
 .plan-row td.emphasized,
 .group-row td.emphasized {
