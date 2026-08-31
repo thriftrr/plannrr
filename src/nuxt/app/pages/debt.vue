@@ -18,30 +18,42 @@ interface DebtRecord {
   paidIn: number
   rate: number | null
   minimumPayment: number | null
+  userStartDate: string | null
+  userStartBalance: number | null
   history: Array<{ month: string, balance: number }>
   hidden: boolean
 }
 
 interface LoanRow extends DebtRecord {
   color: string
+  hasOverride: boolean
+}
+
+type StrategyKey = 'minimum' | 'snowball' | 'avalanche' | 'custom'
+
+interface DebtSettings {
+  strategy: StrategyKey
+  snowball: number
+  extra: number
+  customOrder: string[]
+}
+
+const STRATEGY_META: Record<StrategyKey, { label: string, blurb: string }> = {
+  minimum: { label: 'Minimum payments', blurb: 'Every loan pays only its own monthly — no rollover. The baseline to beat.' },
+  snowball: { label: 'Snowball', blurb: 'Smallest balance first for quick wins; each payoff rolls its payment into the next.' },
+  avalanche: { label: 'Avalanche', blurb: 'Highest APR first — the least total interest, mathematically optimal.' },
+  custom: { label: 'Custom order', blurb: 'Your sequence — arrange exactly which loan gets attacked first.' }
 }
 
 const EXTRAS_KEY = 'ynabrr:debt:extras'
 const SYNC_PLANS_KEY = 'ynabrr:debt:sync-plans'
-
-interface DebtSettings {
-  strategy: 'separate' | 'snowball'
-  snowball: number
-  extra: number
-  order: 'balance' | 'rate'
-}
 
 const debts = ref<DebtRecord[]>([])
 const isMock = ref(false)
 const loading = ref(true)
 const lastSynced = ref<string | null>(null)
 const extras = ref<Record<string, number>>({})
-const settings = ref<DebtSettings>({ strategy: 'separate', snowball: 0, extra: 0, order: 'balance' })
+const settings = ref<DebtSettings>({ strategy: 'minimum', snowball: 0, extra: 0, customOrder: [] })
 
 const syncPlans = ref<Array<{ id: string, name: string, kind: 'live' | 'import' }>>([])
 const selectedPlanIds = ref<string[]>([])
@@ -51,6 +63,9 @@ const syncMessage = ref('')
 const adding = ref(false)
 const addForm = ref({ name: '', original: '', balance: '0', startMonth: '', endMonth: '', rate: '', payment: '' })
 const addMessage = ref('')
+
+const orderModalOpen = ref(false)
+const editing = ref<null | { id: string, name: string, startMonth: string, original: string, isManual: boolean, hasOverride: boolean }>(null)
 
 onMounted(async () => {
   try {
@@ -93,14 +108,14 @@ async function saveSettings (patch: Partial<DebtSettings>) {
   } catch { /* keep local value; next load re-syncs */ }
 }
 
+function selectStrategy (key: StrategyKey) {
+  saveSettings({ strategy: key })
+  if (key === 'custom' && !settings.value.customOrder.length) orderModalOpen.value = true
+}
+
 function onPoolInput (field: 'snowball' | 'extra', event: Event) {
   const value = Number.parseFloat((event.target as HTMLInputElement).value.replace(/[$,]/g, ''))
   saveSettings({ [field]: Number.isFinite(value) && value > 0 ? Math.round(value * 1000) : 0 })
-}
-
-function onOrderChange (event: Event) {
-  const value = (event.target as HTMLSelectElement).value
-  saveSettings({ order: value === 'rate' ? 'rate' : 'balance' })
 }
 
 watch(extras, (value) => {
@@ -166,10 +181,11 @@ async function addDebt () {
   }
 }
 
-async function patchRow (row: DebtRecord, patch: Record<string, unknown>) {
+async function patchRow (row: { id: string }, patch: Record<string, unknown>) {
   // `loans` rows are computed copies — mutate the source record for reactivity.
   const target = debts.value.find(item => item.id === row.id)
   if (target) Object.assign(target, patch)
+  if (isMock.value) return
   try {
     await $fetch(`/api/debt/${row.id}`, { method: 'PATCH', body: patch })
   } catch { await loadDebts() }
@@ -183,13 +199,50 @@ async function removeRow (row: DebtRecord) {
 
 // ---- Derived rows ---------------------------------------------------------
 
+// Straight ramp for the stretch before tracked history begins (user gave the
+// loan's real origination) — mirrors how manual debts chart.
+function rampBefore (fromMonth: string, fromBalance: number, toMonth: string, toBalance: number) {
+  const months: string[] = []
+  for (let key = fromMonth; key < toMonth; key = nextDebtMonth(key)) {
+    months.push(key)
+    if (months.length > 600) break
+  }
+  const span = months.length
+  if (!span) return []
+  return months.map((month, index) => ({
+    month,
+    balance: Math.round(fromBalance + ((toBalance - fromBalance) * index) / span)
+  }))
+}
+
 const loans = computed<LoanRow[]>(() =>
-  debts.value.map((record, index) => ({
-    ...record,
-    color: index < PALETTE.length
+  debts.value.map((record, index) => {
+    const color = index < PALETTE.length
       ? PALETTE[index]!
       : OVERFLOW_COLORS[(index - PALETTE.length) % OVERFLOW_COLORS.length]!
-  }))
+
+    let history = record.history
+    let paidIn = record.paidIn
+    let startDate = record.startDate
+    let startBalance = record.startBalance
+    const hasOverride = Boolean(record.userStartDate || record.userStartBalance != null)
+
+    if (record.userStartDate || record.userStartBalance != null) {
+      const overrideMonth = record.userStartDate ? `${record.userStartDate.slice(0, 7)}-01` : null
+      const overrideBalance = record.userStartBalance ?? record.startBalance
+      startDate = record.userStartDate ?? record.startDate
+      startBalance = overrideBalance
+      const first = record.history[0]
+      if (first && overrideMonth && overrideMonth < first.month) {
+        history = [...rampBefore(overrideMonth, overrideBalance, first.month, first.balance), ...record.history]
+      }
+      if (first) {
+        paidIn = record.paidIn + Math.max(first.balance - overrideBalance, 0)
+      }
+    }
+
+    return { ...record, history, paidIn, startDate, startBalance, color, hasOverride }
+  })
 )
 
 const visibleLoans = computed(() => loans.value.filter(loan => !loan.hidden && loan.history.length > 0))
@@ -219,43 +272,156 @@ const todayMonth = computed(() => {
   return latest
 })
 
-const snowballActive = computed(() => settings.value.strategy === 'snowball')
+// ---- Strategies -----------------------------------------------------------
+
+const pooled = computed(() => settings.value.strategy !== 'minimum')
 const snowballPool = computed(() => settings.value.snowball + settings.value.extra)
 
-const projections = computed(() => {
+const customOrderIds = computed(() => {
+  const active = activeLoans.value
+  const kept = settings.value.customOrder.filter(id => active.some(loan => loan.id === id))
+  const missing = [...active]
+    .sort((a, b) => (-a.balance) - (-b.balance))
+    .map(loan => loan.id)
+    .filter(id => !kept.includes(id))
+  return [...kept, ...missing]
+})
+
+function orderedLoans (key: StrategyKey): LoanRow[] {
+  const active = activeLoans.value
+  if (key === 'snowball') return [...active].sort((a, b) => (-a.balance) - (-b.balance))
+  if (key === 'avalanche') return [...active].sort((a, b) => (rateFor(b) - rateFor(a)) || ((-a.balance) - (-b.balance)))
+  if (key === 'custom') {
+    return customOrderIds.value
+      .map(id => active.find(loan => loan.id === id))
+      .filter((loan): loan is LoanRow => Boolean(loan))
+  }
+  return active
+}
+
+function strategyResult (key: StrategyKey): { map: Map<string, PayoffProjection>, debtFree: string | null, interest: number } {
   const start = todayMonth.value ? nextDebtMonth(todayMonth.value) : ''
   const map = new Map<string, PayoffProjection>()
-  if (!start) return map
+  if (!start || !activeLoans.value.length) return { map, debtFree: null, interest: 0 }
 
-  if (snowballActive.value) {
-    const result = projectSnowball({
-      loans: activeLoans.value.map(loan => ({
-        id: loan.id,
+  if (key === 'minimum') {
+    let latest: string | null = ''
+    let interest = 0
+    for (const loan of activeLoans.value) {
+      const extra = extras.value[loan.id]
+      const projection = projectPayoff({
         balance: -loan.balance,
         annualRatePct: rateFor(loan),
-        minimum: paymentFor(loan),
-        extraFirstMonth: extras.value[loan.id]
-      })),
-      pool: snowballPool.value,
-      order: settings.value.order,
-      fromMonth: start
-    })
-    for (const [id, projection] of Object.entries(result.perLoan)) map.set(id, projection)
-    return map
+        payment: paymentFor(loan),
+        fromMonth: start,
+        extra: extra ? { month: start, amount: extra } : undefined
+      })
+      map.set(loan.id, projection)
+      interest += projection.interestTotal
+      if (!projection.payoffMonth) latest = null
+      else if (latest !== null && projection.payoffMonth > latest) latest = projection.payoffMonth
+    }
+    return { map, debtFree: latest || null, interest }
   }
 
-  for (const loan of activeLoans.value) {
-    const extra = extras.value[loan.id]
-    map.set(loan.id, projectPayoff({
+  const result = projectSnowball({
+    loans: orderedLoans(key).map(loan => ({
+      id: loan.id,
       balance: -loan.balance,
       annualRatePct: rateFor(loan),
-      payment: paymentFor(loan),
-      fromMonth: start,
-      extra: extra ? { month: start, amount: extra } : undefined
-    }))
+      minimum: paymentFor(loan),
+      extraFirstMonth: extras.value[loan.id]
+    })),
+    pool: snowballPool.value,
+    order: 'given',
+    fromMonth: start
+  })
+  for (const [id, projection] of Object.entries(result.perLoan)) map.set(id, projection)
+  return { map, debtFree: result.debtFree, interest: result.interestTotal }
+}
+
+const strategyCards = computed(() =>
+  (['minimum', 'snowball', 'avalanche', 'custom'] as StrategyKey[]).map(key => ({
+    key,
+    ...STRATEGY_META[key],
+    result: strategyResult(key)
+  }))
+)
+
+const selectedResult = computed(() => strategyResult(settings.value.strategy))
+const projections = computed(() => selectedResult.value.map)
+const debtFreeMonth = computed(() => selectedResult.value.debtFree)
+const totalInterest = computed(() => selectedResult.value.interest)
+
+// ---- Order flyout ---------------------------------------------------------
+
+const orderDragIdx = ref<number | null>(null)
+
+const customLoansOrdered = computed(() => orderedLoans('custom'))
+const customResult = computed(() => strategyResult('custom'))
+
+function commitOrder (ids: string[]) {
+  saveSettings({ customOrder: ids, strategy: 'custom' })
+}
+
+function moveOrder (index: number, direction: -1 | 1) {
+  const ids = customLoansOrdered.value.map(loan => loan.id)
+  const target = index + direction
+  if (target < 0 || target >= ids.length) return
+  const moved = ids[index]!
+  ids[index] = ids[target]!
+  ids[target] = moved
+  commitOrder(ids)
+}
+
+function onOrderDrop (dropIdx: number) {
+  if (orderDragIdx.value === null || orderDragIdx.value === dropIdx) {
+    orderDragIdx.value = null
+    return
   }
-  return map
-})
+  const ids = customLoansOrdered.value.map(loan => loan.id)
+  const [moved] = ids.splice(orderDragIdx.value, 1)
+  ids.splice(dropIdx, 0, moved!)
+  orderDragIdx.value = null
+  commitOrder(ids)
+}
+
+// ---- Row editor flyout ----------------------------------------------------
+
+function openEditor (loan: LoanRow) {
+  const raw = debts.value.find(item => item.id === loan.id)
+  if (!raw) return
+  const effectiveDate = raw.userStartDate ?? raw.startDate
+  const effectiveBalance = raw.userStartBalance ?? raw.startBalance
+  editing.value = {
+    id: raw.id,
+    name: raw.name,
+    startMonth: effectiveDate ? effectiveDate.slice(0, 7) : '',
+    original: effectiveBalance ? (-effectiveBalance / 1000).toFixed(2) : '',
+    isManual: raw.source === 'manual',
+    hasOverride: Boolean(raw.userStartDate || raw.userStartBalance != null)
+  }
+}
+
+async function saveEditor () {
+  const edit = editing.value
+  if (!edit) return
+  const original = Number.parseFloat(edit.original.replace(/[$,]/g, ''))
+  const patch: Record<string, unknown> = {
+    userStartDate: edit.startMonth ? `${edit.startMonth}-01` : null,
+    userStartBalance: Number.isFinite(original) && original > 0 ? -Math.round(original * 1000) : null
+  }
+  if (edit.isManual && edit.name.trim()) patch.name = edit.name.trim()
+  await patchRow({ id: edit.id }, patch)
+  editing.value = null
+}
+
+async function clearEditorOverride () {
+  const edit = editing.value
+  if (!edit) return
+  await patchRow({ id: edit.id }, { userStartDate: null, userStartBalance: null })
+  editing.value = null
+}
 
 // ---- Chart model ----------------------------------------------------------
 
@@ -432,24 +598,11 @@ const totalBalance = computed(() => activeLoans.value.reduce((sum, loan) => sum 
 const totalPaidIn = computed(() => visibleLoans.value.reduce((sum, loan) => sum + loan.paidIn, 0))
 const totalMinimums = computed(() => activeLoans.value.reduce((sum, loan) => sum + paymentFor(loan), 0))
 const totalPayment = computed(() =>
-  snowballActive.value ? totalMinimums.value + snowballPool.value : totalMinimums.value
-)
-const totalInterest = computed(() =>
-  activeLoans.value.reduce((sum, loan) => sum + (projections.value.get(loan.id)?.interestTotal ?? 0), 0)
+  pooled.value ? totalMinimums.value + snowballPool.value : totalMinimums.value
 )
 const stuckLoans = computed(() =>
   activeLoans.value.filter(loan => !projections.value.get(loan.id)?.payoffMonth)
 )
-const debtFreeMonth = computed(() => {
-  if (!activeLoans.value.length) return null
-  let latest: string | null = ''
-  for (const loan of activeLoans.value) {
-    const payoff = projections.value.get(loan.id)?.payoffMonth
-    if (!payoff) { latest = null; break }
-    if (payoff > latest!) latest = payoff
-  }
-  return latest || null
-})
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
 const fmt = (milliunits: number) => usd.format(milliunits / 1000)
@@ -480,6 +633,8 @@ const syncedLabel = computed(() => {
   return new Date(lastSynced.value).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 })
 
+const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].label)
+
 // ---- Row edit handlers ----------------------------------------------------
 
 function onRate (loan: LoanRow, event: Event) {
@@ -506,7 +661,7 @@ function onExtra (loan: LoanRow, event: Event) {
         <h1><NuxtLink to="/">YNABRR</NuxtLink> <span class="crumb">/ Debt</span></h1>
         <p class="tagline">
           Every loan's real history — synced from YNAB or added by hand — then
-          the road ahead. Tweak payments and rates to bend the curve.
+          the road ahead. Pick a payoff strategy and bend the curve.
         </p>
       </div>
       <nav class="nav">
@@ -568,8 +723,8 @@ function onExtra (loan: LoanRow, event: Event) {
           <h3>Monthly payments</h3>
           <p>{{ fmt(totalPayment) }}</p>
           <p class="sub">
-            <template v-if="snowballActive">{{ fmt(totalMinimums) }} minimums + {{ fmt(snowballPool) }} snowball</template>
-            <template v-else>current plan, editable below</template>
+            <template v-if="pooled">{{ fmt(totalMinimums) }} minimums + {{ fmt(snowballPool) }} snowball</template>
+            <template v-else>minimums only, editable below</template>
           </p>
         </article>
         <article :class="{ negative: activeLoans.length && !debtFreeMonth }">
@@ -583,13 +738,29 @@ function onExtra (loan: LoanRow, event: Event) {
         </article>
       </section>
 
+      <section class="strategies">
+        <button
+          v-for="card in strategyCards"
+          :key="card.key"
+          class="strategy-card"
+          :class="{ on: settings.strategy === card.key }"
+          @click="selectStrategy(card.key)"
+        >
+          <span class="strat-name">{{ card.label }}</span>
+          <span class="strat-blurb">{{ card.blurb }}</span>
+          <span class="strat-result">
+            <template v-if="card.result.debtFree">
+              <strong>{{ dateLabel(card.result.debtFree) }}</strong>
+              · {{ fmt(card.result.interest) }} interest
+            </template>
+            <template v-else-if="activeLoans.length">never at these payments</template>
+            <template v-else>—</template>
+          </span>
+        </button>
+      </section>
+
       <section class="strategy-bar">
-        <span class="picker-label">Payoff strategy</span>
-        <div class="mode-pills">
-          <button :class="{ on: !snowballActive }" @click="saveSettings({ strategy: 'separate' })">Separate</button>
-          <button :class="{ on: snowballActive }" @click="saveSettings({ strategy: 'snowball' })">Snowball</button>
-        </div>
-        <template v-if="snowballActive">
+        <template v-if="pooled">
           <label class="pool-field">
             Snowball
             <input
@@ -612,12 +783,13 @@ function onExtra (loan: LoanRow, event: Event) {
             >
             /mo
           </label>
-          <select :value="settings.order" aria-label="Snowball target order" @change="onOrderChange">
-            <option value="balance">Smallest balance first</option>
-            <option value="rate">Highest APR first</option>
-          </select>
+          <button v-if="settings.strategy === 'custom'" class="ghost-btn" @click="orderModalOpen = true">
+            Arrange order…
+          </button>
         </template>
-        <span v-else class="muted">each loan pays its own monthly, independently</span>
+        <span v-else class="muted">
+          Add a snowball on one of the rollover strategies to see how much faster this could go.
+        </span>
       </section>
 
       <section v-if="chart" class="chart-card">
@@ -670,19 +842,19 @@ function onExtra (loan: LoanRow, event: Event) {
           <span class="legend-item muted"><span class="chip dashed" /> projected</span>
         </div>
 
-        <p v-if="debtFreeMonth && snowballActive" class="payoff-strip">
-          Snowballing <strong>{{ fmt(snowballPool) }}</strong> on top of {{ fmt(totalMinimums) }} in minimums
-          clears everything by <strong>{{ monthLabel(debtFreeMonth) }}</strong> —
+        <p v-if="debtFreeMonth && pooled" class="payoff-strip">
+          <strong>{{ strategyLabel }}</strong>: {{ fmt(snowballPool) }} on top of {{ fmt(totalMinimums) }}
+          in minimums clears everything by <strong>{{ monthLabel(debtFreeMonth) }}</strong> —
           {{ timeUntil(debtFreeMonth) }} from now. As each loan falls, its payment rolls into the next.
         </p>
         <p v-else-if="debtFreeMonth" class="payoff-strip">
-          Paying <strong>{{ fmt(totalPayment) }}</strong> a month clears everything by
-          <strong>{{ monthLabel(debtFreeMonth) }}</strong> — {{ timeUntil(debtFreeMonth) }} from now.
+          Paying minimums only clears everything by <strong>{{ monthLabel(debtFreeMonth) }}</strong>
+          — {{ timeUntil(debtFreeMonth) }} from now.
         </p>
         <p v-else-if="stuckLoans.length" class="payoff-strip warn">
           {{ stuckLoans.map(loan => loan.name).join(', ') }}
           {{ stuckLoans.length === 1 ? "doesn't" : "don't" }} amortize at the current
-          payment — raise the monthly amount below.
+          payment — raise the monthly amount below or add a snowball.
         </p>
       </section>
 
@@ -714,7 +886,10 @@ function onExtra (loan: LoanRow, event: Event) {
                 {{ loan.name }}
                 <span class="plan-name">{{ loan.source === 'manual' ? 'manual' : loan.planName }}</span>
               </td>
-              <td>{{ loan.startDate ? dateLabel(loan.startDate) : '—' }}</td>
+              <td>
+                {{ loan.startDate ? dateLabel(loan.startDate) : '—' }}
+                <span v-if="loan.hasOverride" class="override-mark" title="Start adjusted by you — sync keeps it">*</span>
+              </td>
               <td class="num">{{ fmt(-loan.startBalance) }}</td>
               <td class="num">{{ fmt(loan.paidIn) }}</td>
               <td class="num strong">{{ loan.balance < 0 ? fmt(-loan.balance) : 'Paid ✓' }}</td>
@@ -736,14 +911,14 @@ function onExtra (loan: LoanRow, event: Event) {
               <td class="num">
                 {{ loan.balance < 0 && !loan.hidden && projections.get(loan.id)?.payoffMonth ? fmt(projections.get(loan.id)!.interestTotal) : '—' }}
               </td>
-              <td>
+              <td class="row-actions">
+                <button class="reset" title="Edit start date, original amount, name" @click="openEditor(loan)">✎</button>
                 <button v-if="loan.source === 'manual' && !isMock" class="reset" title="Delete this debt" @click="removeRow(loan)">✕</button>
               </td>
             </tr>
           </tbody>
         </table>
       </section>
-
     </template>
 
     <section v-if="!loading && !isMock" class="manage">
@@ -766,10 +941,87 @@ function onExtra (loan: LoanRow, event: Event) {
     </section>
 
     <p v-if="!loading && loans.length" class="footnote">
-      Synced rows refresh from YNAB when you hit Sync (your APR and Monthly
-      edits survive). Manual rows chart a straight paydown between their two
-      known points. "Extra next mo" is a what-if that stays in this browser.
+      Synced rows refresh from YNAB when you hit Sync (your APR, Monthly, and
+      start-date fixes survive). Manual rows chart a straight paydown between
+      their two known points. "Extra next mo" is a what-if that stays in this
+      browser.
     </p>
+
+    <!-- Payoff order flyout -->
+    <div v-if="orderModalOpen" class="flyout-backdrop" @click.self="orderModalOpen = false">
+      <aside class="flyout" role="dialog" aria-modal="true" aria-label="Arrange payoff order">
+        <header class="flyout-head">
+          <h2>Payoff order</h2>
+          <button class="reset" aria-label="Close" @click="orderModalOpen = false">✕</button>
+        </header>
+        <p class="muted">Top gets attacked first. Drag rows or use the arrows — payoff dates update live.</p>
+        <ul class="order-list">
+          <li
+            v-for="(loan, index) in customLoansOrdered"
+            :key="loan.id"
+            draggable="true"
+            :class="{ dragging: orderDragIdx === index }"
+            @dragstart="orderDragIdx = index"
+            @dragover.prevent
+            @drop="onOrderDrop(index)"
+            @dragend="orderDragIdx = null"
+          >
+            <span class="order-pos">{{ index + 1 }}</span>
+            <span class="drag-grip" title="Drag to reorder">⠿</span>
+            <span class="chip" :style="{ background: loan.color }" />
+            <span class="order-name">{{ loan.name }}</span>
+            <span class="order-balance">{{ fmt(-loan.balance) }}</span>
+            <span class="order-payoff">
+              {{ customResult.map.get(loan.id)?.payoffMonth ? dateLabel(customResult.map.get(loan.id)!.payoffMonth!) : '—' }}
+            </span>
+            <span class="order-btns">
+              <button :disabled="index === 0" aria-label="Move up" @click="moveOrder(index, -1)">↑</button>
+              <button :disabled="index === customLoansOrdered.length - 1" aria-label="Move down" @click="moveOrder(index, 1)">↓</button>
+            </span>
+          </li>
+        </ul>
+        <footer class="flyout-foot">
+          <span class="muted">
+            Debt-free {{ customResult.debtFree ? dateLabel(customResult.debtFree) : '—' }}
+            · {{ fmt(customResult.interest) }} interest
+          </span>
+          <button class="primary" @click="orderModalOpen = false">Done</button>
+        </footer>
+      </aside>
+    </div>
+
+    <!-- Row editor flyout -->
+    <div v-if="editing" class="flyout-backdrop" @click.self="editing = null">
+      <aside class="flyout" role="dialog" aria-modal="true" aria-label="Edit debt details">
+        <header class="flyout-head">
+          <h2>Edit {{ editing.name }}</h2>
+          <button class="reset" aria-label="Close" @click="editing = null">✕</button>
+        </header>
+        <p class="muted">
+          YNAB only knows when a loan was <em>added</em> — set when it really
+          started and its true original amount, and the chart reaches back with
+          a straight ramp.
+        </p>
+        <div class="edit-fields">
+          <label v-if="editing.isManual">
+            Name
+            <input v-model="editing.name" aria-label="Debt name">
+          </label>
+          <label>
+            Loan actually started
+            <input v-model="editing.startMonth" type="month" aria-label="Actual start month">
+          </label>
+          <label>
+            Original amount $
+            <input v-model="editing.original" inputmode="decimal" aria-label="Original amount">
+          </label>
+        </div>
+        <footer class="flyout-foot">
+          <button v-if="editing.hasOverride" class="ghost-btn" @click="clearEditorOverride">Reset to synced values</button>
+          <button class="primary" @click="saveEditor">Save</button>
+        </footer>
+      </aside>
+    </div>
   </main>
 </template>
 
@@ -853,8 +1105,49 @@ function onExtra (loan: LoanRow, event: Event) {
 
 .primary:disabled { opacity: 0.55; cursor: not-allowed; }
 
+.ghost-btn {
+  padding: 0.35rem 0.9rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
 .sync-msg { font-size: 0.85rem; color: #1b7f3b; }
 .muted { color: #999; font-size: 0.85rem; }
+
+.strategies {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.75rem;
+  margin: 0 0 0.75rem;
+}
+
+.strategy-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.strategy-card.on {
+  border-color: #4a7dff;
+  background: #f7faff;
+  box-shadow: inset 0 0 0 1px #4a7dff;
+}
+
+.strat-name { font-weight: 600; font-size: 0.925rem; }
+.strat-blurb { font-size: 0.78rem; color: #777; line-height: 1.35; }
+.strat-result { font-size: 0.8rem; color: #444; font-variant-numeric: tabular-nums; }
+.strategy-card.on .strat-result { color: #2b52c7; }
 
 .strategy-bar {
   display: flex;
@@ -862,28 +1155,6 @@ function onExtra (loan: LoanRow, event: Event) {
   gap: 0.6rem;
   align-items: center;
   margin: 0 0 1rem;
-}
-
-.mode-pills {
-  display: inline-flex;
-  border: 1px solid #ccc;
-  border-radius: 999px;
-  overflow: hidden;
-}
-
-.mode-pills button {
-  padding: 0.3rem 0.9rem;
-  border: none;
-  background: #fff;
-  font: inherit;
-  font-size: 0.85rem;
-  cursor: pointer;
-  color: #555;
-}
-
-.mode-pills button.on {
-  background: #4a7dff;
-  color: #fff;
 }
 
 .pool-field {
@@ -903,15 +1174,6 @@ function onExtra (loan: LoanRow, event: Event) {
   font-size: 0.85rem;
   text-align: right;
   font-variant-numeric: tabular-nums;
-}
-
-.strategy-bar select {
-  padding: 0.32rem 0.5rem;
-  border: 1px solid #ccc;
-  border-radius: 6px;
-  background: #fff;
-  font: inherit;
-  font-size: 0.85rem;
 }
 
 .status {
@@ -1038,6 +1300,7 @@ td.name { white-space: nowrap; }
 td.name .chip { margin-right: 0.4rem; }
 
 .plan-name { margin-left: 0.45rem; font-size: 0.72rem; color: #999; }
+.override-mark { color: #4a7dff; font-weight: 700; }
 
 th.edit, td.edit { background: #f7faff; }
 td.edit input {
@@ -1055,6 +1318,7 @@ td.edit input:disabled { background: #f3f5f9; border-color: #dde3f0; color: #a9b
 
 tr.off td { color: #a9b0bf; }
 
+.row-actions { white-space: nowrap; }
 .reset { border: none; background: none; cursor: pointer; color: #4a7dff; font-size: 1rem; }
 
 .manage {
@@ -1084,4 +1348,120 @@ tr.off td { color: #a9b0bf; }
 .add-form input:first-child { flex: 1 1 14rem; }
 
 .footnote { color: #999; font-size: 0.8rem; margin-top: 1rem; }
+
+/* ---- Flyouts ---- */
+
+.flyout-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgb(15 18 24 / 32%);
+  z-index: 40;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.flyout {
+  width: min(30rem, 100%);
+  height: 100%;
+  background: #fff;
+  box-shadow: -12px 0 32px rgb(0 0 0 / 18%);
+  padding: 1.25rem 1.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  overflow-y: auto;
+}
+
+.flyout-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.flyout-head h2 { margin: 0; font-size: 1.1rem; }
+
+.order-list {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.order-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.order-list li.dragging { opacity: 0.5; border-style: dashed; }
+
+.order-pos {
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 50%;
+  background: #eef4ff;
+  color: #2b52c7;
+  font-size: 0.75rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.drag-grip { color: #c2c7d2; cursor: grab; }
+.order-name { flex: 1; font-size: 0.9rem; }
+.order-balance { font-variant-numeric: tabular-nums; font-size: 0.85rem; color: #555; }
+.order-payoff { font-size: 0.8rem; color: #2b52c7; min-width: 4.6rem; text-align: right; font-variant-numeric: tabular-nums; }
+
+.order-btns { display: inline-flex; gap: 0.2rem; }
+.order-btns button {
+  border: 1px solid #ccc;
+  background: #fff;
+  border-radius: 5px;
+  width: 1.6rem;
+  height: 1.6rem;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+}
+.order-btns button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.flyout-foot {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid #eee;
+}
+
+.edit-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  margin-top: 0.4rem;
+}
+
+.edit-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.edit-fields input {
+  padding: 0.45rem 0.6rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font: inherit;
+}
 </style>

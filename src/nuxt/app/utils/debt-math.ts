@@ -35,14 +35,16 @@ export interface SnowballResult {
 export function projectSnowball (options: {
   loans: SnowballLoanInput[]
   pool: number
-  order: 'balance' | 'rate'
+  order: 'balance' | 'rate' | 'given'
   fromMonth: string
   capMonths?: number
 }): SnowballResult {
   const cap = options.capMonths ?? 600
-  const ordered = [...options.loans].sort((a, b) => options.order === 'rate'
-    ? (b.annualRatePct - a.annualRatePct) || (a.balance - b.balance)
-    : (a.balance - b.balance))
+  const ordered = options.order === 'given'
+    ? [...options.loans]
+    : [...options.loans].sort((a, b) => options.order === 'rate'
+      ? (b.annualRatePct - a.annualRatePct) || (a.balance - b.balance)
+      : (a.balance - b.balance))
 
   const state = new Map(ordered.map(loan => [loan.id, {
     balance: Math.max(loan.balance, 0),

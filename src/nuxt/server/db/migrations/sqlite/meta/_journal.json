@@ -15,6 +15,13 @@
       "when": 1788186784013,
       "tag": "0001_silky_grey_gargoyle",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788189117973,
+      "tag": "0002_volatile_wrecker",
+      "breakpoints": true
     }
   ]
 }

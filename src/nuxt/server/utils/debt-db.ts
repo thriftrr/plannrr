@@ -20,6 +20,8 @@ export interface DebtRecord {
   paidIn: number
   rate: number | null
   minimumPayment: number | null
+  userStartDate: string | null
+  userStartBalance: number | null
   history: DebtHistoryPoint[]
   hidden: boolean
   updatedAt: string | null
@@ -57,6 +59,8 @@ function toRecord (row: DebtRow): DebtRecord {
     paidIn: row.paidIn,
     rate: row.rate,
     minimumPayment: row.minimumPayment,
+    userStartDate: row.userStartDate,
+    userStartBalance: row.userStartBalance,
     history,
     hidden: Boolean(row.hidden),
     updatedAt: row.updatedAt
@@ -176,7 +180,7 @@ export function linearHistory (startMonth: string, startBalance: number, endMont
   }))
 }
 
-const PATCHABLE = ['name', 'rate', 'minimumPayment', 'hidden'] as const
+const PATCHABLE = ['name', 'rate', 'minimumPayment', 'hidden', 'userStartDate', 'userStartBalance'] as const
 export type DebtPatch = Partial<Pick<DebtRecord, typeof PATCHABLE[number]>>
 
 export async function patchDebt (userId: string, id: string, patch: DebtPatch): Promise<boolean> {
@@ -185,6 +189,8 @@ export async function patchDebt (userId: string, id: string, patch: DebtPatch): 
   if (patch.rate !== undefined) set.rate = patch.rate
   if (patch.minimumPayment !== undefined) set.minimumPayment = patch.minimumPayment
   if (patch.hidden !== undefined) set.hidden = patch.hidden ? 1 : 0
+  if (patch.userStartDate !== undefined) set.userStartDate = patch.userStartDate
+  if (patch.userStartBalance !== undefined) set.userStartBalance = patch.userStartBalance
   const rows = await db.update(schema.debts).set(set)
     .where(and(eq(schema.debts.id, id), eq(schema.debts.userId, userId)))
     .returning({ id: schema.debts.id })
@@ -198,31 +204,47 @@ export async function deleteDebt (userId: string, id: string): Promise<boolean> 
   return rows.length > 0
 }
 
-// Payoff-strategy settings (snowball pool, extra, target order) persist per
-// owner in KV — small, single-row shaped, no migration needed.
+// Payoff-strategy settings (strategy, snowball pool, extra, custom order)
+// persist per owner in KV — small, single-row shaped, no migration needed.
+export type DebtStrategy = 'minimum' | 'snowball' | 'avalanche' | 'custom'
+
 export interface DebtSettings {
-  strategy: 'separate' | 'snowball'
+  strategy: DebtStrategy
   snowball: number
   extra: number
-  order: 'balance' | 'rate'
+  customOrder: string[]
 }
 
-export const defaultDebtSettings: DebtSettings = { strategy: 'separate', snowball: 0, extra: 0, order: 'balance' }
+export const defaultDebtSettings: DebtSettings = { strategy: 'minimum', snowball: 0, extra: 0, customOrder: [] }
+
+const STRATEGIES: DebtStrategy[] = ['minimum', 'snowball', 'avalanche', 'custom']
 
 const settingsKey = (owner: string) => `debt-settings:${owner}`
 
 export async function getDebtSettings (owner: string): Promise<DebtSettings> {
-  const stored = await kv.get<Partial<DebtSettings>>(settingsKey(owner))
-  return { ...defaultDebtSettings, ...stored }
+  const stored = await kv.get<Partial<DebtSettings> & { strategy?: string, order?: string }>(settingsKey(owner))
+  if (!stored) return { ...defaultDebtSettings }
+  // Legacy shapes: 'separate' -> minimum; 'snowball' + order rate -> avalanche
+  let strategy = stored.strategy as DebtStrategy | 'separate' | undefined
+  if (strategy === 'separate') strategy = 'minimum'
+  else if (strategy === 'snowball' && stored.order === 'rate') strategy = 'avalanche'
+  return {
+    strategy: STRATEGIES.includes(strategy as DebtStrategy) ? strategy as DebtStrategy : 'minimum',
+    snowball: typeof stored.snowball === 'number' ? stored.snowball : 0,
+    extra: typeof stored.extra === 'number' ? stored.extra : 0,
+    customOrder: Array.isArray(stored.customOrder) ? stored.customOrder.filter(id => typeof id === 'string').slice(0, 100) : []
+  }
 }
 
 export async function putDebtSettings (owner: string, input: Partial<DebtSettings>): Promise<DebtSettings> {
   const current = await getDebtSettings(owner)
   const next: DebtSettings = {
-    strategy: input.strategy === 'snowball' ? 'snowball' : input.strategy === 'separate' ? 'separate' : current.strategy,
+    strategy: STRATEGIES.includes(input.strategy as DebtStrategy) ? input.strategy as DebtStrategy : current.strategy,
     snowball: Number.isFinite(Number(input.snowball)) ? Math.max(Math.round(Number(input.snowball)), 0) : current.snowball,
     extra: Number.isFinite(Number(input.extra)) ? Math.max(Math.round(Number(input.extra)), 0) : current.extra,
-    order: input.order === 'rate' ? 'rate' : input.order === 'balance' ? 'balance' : current.order
+    customOrder: Array.isArray(input.customOrder)
+      ? input.customOrder.filter(id => typeof id === 'string' && id.length < 100).slice(0, 100)
+      : current.customOrder
   }
   await kv.set(settingsKey(owner), next)
   return next
