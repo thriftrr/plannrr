@@ -65,7 +65,22 @@ const addForm = ref({ name: '', original: '', balance: '0', startMonth: '', endM
 const addMessage = ref('')
 
 const orderModalOpen = ref(false)
-const editing = ref<null | { id: string, name: string, startMonth: string, original: string, isManual: boolean, hasOverride: boolean }>(null)
+const editing = ref<null | {
+  id: string
+  name: string
+  startMonth: string
+  original: string
+  balance: string
+  endMonth: string
+  rate: string
+  payment: string
+  isManual: boolean
+  isPaid: boolean
+  hasOverride: boolean
+  syncedBalance: string
+  syncedPaidIn: string
+  planName: string
+}>(null)
 
 onMounted(async () => {
   try {
@@ -398,21 +413,63 @@ function openEditor (loan: LoanRow) {
     name: raw.name,
     startMonth: effectiveDate ? effectiveDate.slice(0, 7) : '',
     original: effectiveBalance ? (-effectiveBalance / 1000).toFixed(2) : '',
+    balance: (-raw.balance / 1000).toFixed(2),
+    endMonth: raw.endDate ? raw.endDate.slice(0, 7) : '',
+    rate: raw.rate != null ? String(raw.rate) : '',
+    payment: raw.minimumPayment != null ? (raw.minimumPayment / 1000).toFixed(2) : '',
     isManual: raw.source === 'manual',
-    hasOverride: Boolean(raw.userStartDate || raw.userStartBalance != null)
+    isPaid: raw.balance >= 0,
+    hasOverride: Boolean(raw.userStartDate || raw.userStartBalance != null),
+    syncedBalance: fmt(-raw.balance),
+    syncedPaidIn: fmt(raw.paidIn),
+    planName: raw.planName
   }
 }
 
 async function saveEditor () {
   const edit = editing.value
   if (!edit) return
-  const original = Number.parseFloat(edit.original.replace(/[$,]/g, ''))
-  const patch: Record<string, unknown> = {
-    userStartDate: edit.startMonth ? `${edit.startMonth}-01` : null,
-    userStartBalance: Number.isFinite(original) && original > 0 ? -Math.round(original * 1000) : null
+  const money = (raw: string) => Number.parseFloat(raw.replace(/[$,]/g, ''))
+  const rate = Number.parseFloat(edit.rate)
+  const payment = money(edit.payment)
+
+  if (edit.isManual) {
+    const patch: Record<string, unknown> = {
+      manualShape: {
+        original: money(edit.original),
+        balance: Number.isFinite(money(edit.balance)) ? money(edit.balance) : 0,
+        startMonth: edit.startMonth,
+        endMonth: edit.endMonth || null
+      },
+      rate: Number.isFinite(rate) && rate > 0 ? rate : null,
+      minimumPayment: Number.isFinite(payment) && payment > 0 ? Math.round(payment * 1000) : null
+    }
+    if (edit.name.trim()) patch.name = edit.name.trim()
+    const target = debts.value.find(item => item.id === edit.id)
+    if (isMock.value && target) {
+      // Mock is demo-only: apply the flat fields locally.
+      Object.assign(target, {
+        name: edit.name.trim() || target.name,
+        rate: patch.rate,
+        minimumPayment: patch.minimumPayment
+      })
+    } else {
+      try {
+        await $fetch(`/api/debt/${edit.id}`, { method: 'PATCH', body: patch })
+      } catch { /* reload below re-syncs */ }
+      await loadDebts()
+    }
+    editing.value = null
+    return
   }
-  if (edit.isManual && edit.name.trim()) patch.name = edit.name.trim()
-  await patchRow({ id: edit.id }, patch)
+
+  const original = money(edit.original)
+  await patchRow({ id: edit.id }, {
+    userStartDate: edit.startMonth ? `${edit.startMonth}-01` : null,
+    userStartBalance: Number.isFinite(original) && original > 0 ? -Math.round(original * 1000) : null,
+    rate: Number.isFinite(rate) && rate > 0 ? rate : null,
+    minimumPayment: Number.isFinite(payment) && payment > 0 ? Math.round(payment * 1000) : null
+  })
   editing.value = null
 }
 
@@ -997,27 +1054,53 @@ function onExtra (loan: LoanRow, event: Event) {
           <h2>Edit {{ editing.name }}</h2>
           <button class="reset" aria-label="Close" @click="editing = null">✕</button>
         </header>
-        <p class="muted">
-          YNAB only knows when a loan was <em>added</em> — set when it really
-          started and its true original amount, and the chart reaches back with
-          a straight ramp.
+        <p v-if="editing.isManual" class="muted">
+          Manual debt — everything is yours to shape. Changing amounts or dates
+          redraws its paydown on the chart.
+        </p>
+        <p v-else class="muted">
+          Synced from <strong>{{ editing.planName }}</strong>. Balance and
+          payment history come from YNAB; start date, original amount, APR, and
+          monthly payment are yours to set and survive every sync.
         </p>
         <div class="edit-fields">
           <label v-if="editing.isManual">
             Name
             <input v-model="editing.name" aria-label="Debt name">
           </label>
-          <label>
-            Loan actually started
-            <input v-model="editing.startMonth" type="month" aria-label="Actual start month">
-          </label>
-          <label>
-            Original amount $
-            <input v-model="editing.original" inputmode="decimal" aria-label="Original amount">
-          </label>
+          <p v-else class="edit-fact">
+            <span>{{ editing.name }}</span>
+            <span class="muted">balance {{ editing.syncedBalance }} · paid in {{ editing.syncedPaidIn }} — synced from YNAB</span>
+          </p>
+          <div class="edit-grid">
+            <label>
+              {{ editing.isManual ? 'Original amount $' : 'True original amount $' }}
+              <input v-model="editing.original" inputmode="decimal" aria-label="Original amount">
+            </label>
+            <label v-if="editing.isManual">
+              Balance now $ (0 = paid)
+              <input v-model="editing.balance" inputmode="decimal" aria-label="Current balance">
+            </label>
+            <label>
+              {{ editing.isManual ? 'Started' : 'Loan actually started' }}
+              <input v-model="editing.startMonth" type="month" aria-label="Start month">
+            </label>
+            <label v-if="editing.isManual">
+              Paid off (optional)
+              <input v-model="editing.endMonth" type="month" aria-label="Paid off month">
+            </label>
+            <label>
+              APR %
+              <input v-model="editing.rate" inputmode="decimal" aria-label="APR percent" :disabled="editing.isPaid">
+            </label>
+            <label>
+              Monthly payment $
+              <input v-model="editing.payment" inputmode="decimal" aria-label="Monthly payment" :disabled="editing.isPaid">
+            </label>
+          </div>
         </div>
         <footer class="flyout-foot">
-          <button v-if="editing.hasOverride" class="ghost-btn" @click="clearEditorOverride">Reset to synced values</button>
+          <button v-if="editing.hasOverride && !editing.isManual" class="ghost-btn" @click="clearEditorOverride">Reset start to synced</button>
           <button class="primary" @click="saveEditor">Save</button>
         </footer>
       </aside>
@@ -1463,5 +1546,21 @@ tr.off td { color: #a9b0bf; }
   border: 1px solid #ccc;
   border-radius: 6px;
   font: inherit;
+}
+
+.edit-fields input:disabled { background: #f3f5f9; color: #a9b0bf; }
+
+.edit-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.7rem;
+}
+
+.edit-fact {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.925rem;
 }
 </style>

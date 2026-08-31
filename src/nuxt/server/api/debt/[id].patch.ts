@@ -10,7 +10,49 @@ export default defineEventHandler(async (event) => {
     hidden?: boolean
     userStartDate?: string | null
     userStartBalance?: number | null
+    manualShape?: {
+      original?: number
+      balance?: number
+      startMonth?: string
+      endMonth?: string | null
+    }
   }>(event)
+
+  // Structural edits to a manual row rebuild its history server-side.
+  if (body?.manualShape) {
+    const source = await getDebtSourceType(owner, id)
+    if (source !== 'manual') {
+      throw createError({ statusCode: 400, statusMessage: 'Only manual debts can be reshaped — synced rows come from YNAB' })
+    }
+    const shape = body.manualShape
+    const original = Number(shape.original)
+    const balance = Number(shape.balance ?? 0)
+    if (!Number.isFinite(original) || original <= 0) {
+      throw createError({ statusCode: 400, statusMessage: 'Original amount must be a positive number' })
+    }
+    if (!Number.isFinite(balance) || balance < 0 || balance > original) {
+      throw createError({ statusCode: 400, statusMessage: 'Balance must be between 0 and the original amount' })
+    }
+    if (!shape.startMonth || !MONTH_DATE_RE.test(shape.startMonth)) {
+      throw createError({ statusCode: 400, statusMessage: 'Start month is required (YYYY-MM)' })
+    }
+    if (shape.endMonth && !MONTH_DATE_RE.test(shape.endMonth)) {
+      throw createError({ statusCode: 400, statusMessage: 'Paid-off month must be YYYY-MM' })
+    }
+    const rate = Number(body.rate)
+    const minimum = Number(body.minimumPayment)
+    const ok = await updateManualDebt(owner, id, {
+      name: typeof body.name === 'string' && body.name.trim() ? body.name.trim() : undefined,
+      startBalance: -Math.round(original * 1000),
+      balance: -Math.round(balance * 1000),
+      startMonth: `${shape.startMonth.slice(0, 7)}-01`,
+      endMonth: shape.endMonth ? `${shape.endMonth.slice(0, 7)}-01` : null,
+      rate: Number.isFinite(rate) && rate > 0 ? rate : null,
+      minimumPayment: Number.isFinite(minimum) && minimum > 0 ? Math.round(minimum) : null
+    })
+    if (!ok) throw createError({ statusCode: 404, statusMessage: 'Debt not found' })
+    return { ok: true }
+  }
 
   const patch: DebtPatch = {}
   if (typeof body?.name === 'string' && body.name.trim()) patch.name = body.name.trim()

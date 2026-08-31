@@ -180,6 +180,48 @@ export function linearHistory (startMonth: string, startBalance: number, endMont
   }))
 }
 
+export async function getDebtSourceType (userId: string, id: string): Promise<string | null> {
+  const row = await db.select({ source: schema.debts.source }).from(schema.debts)
+    .where(and(eq(schema.debts.id, id), eq(schema.debts.userId, userId)))
+    .get()
+  return row?.source ?? null
+}
+
+// Manual rows are fully user-shaped: structural edits rebuild the linear
+// history exactly like creation does.
+export async function updateManualDebt (userId: string, id: string, input: {
+  name?: string
+  startBalance: number
+  balance: number
+  startMonth: string
+  endMonth: string | null
+  rate: number | null
+  minimumPayment: number | null
+}): Promise<boolean> {
+  const nowMonth = `${new Date().toISOString().slice(0, 7)}-01`
+  const endMonth = input.endMonth ?? nowMonth
+  const set: Record<string, unknown> = {
+    startDate: input.startMonth.slice(0, 10),
+    endDate: input.balance >= 0 ? endMonth.slice(0, 10) : null,
+    startBalance: input.startBalance,
+    balance: input.balance,
+    paidIn: Math.max(input.balance - input.startBalance, 0),
+    rate: input.rate,
+    minimumPayment: input.minimumPayment,
+    history: JSON.stringify(linearHistory(input.startMonth, input.startBalance, input.balance >= 0 ? endMonth : nowMonth, input.balance)),
+    updatedAt: new Date().toISOString()
+  }
+  if (input.name) set.name = input.name
+  const rows = await db.update(schema.debts).set(set)
+    .where(and(
+      eq(schema.debts.id, id),
+      eq(schema.debts.userId, userId),
+      eq(schema.debts.source, 'manual')
+    ))
+    .returning({ id: schema.debts.id })
+  return rows.length > 0
+}
+
 const PATCHABLE = ['name', 'rate', 'minimumPayment', 'hidden', 'userStartDate', 'userStartBalance'] as const
 export type DebtPatch = Partial<Pick<DebtRecord, typeof PATCHABLE[number]>>
 
