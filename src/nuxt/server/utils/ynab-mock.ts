@@ -226,7 +226,7 @@ export function resolveMockDebtSources () {
         planName: 'Mock Family Budget',
         accounts: [
           { name: '🚐 RV Loan', startDate: '2024-06-15', startBalance: -19_591_080, balance: rv[rv.length - 1]!.balance, paidIn: 105_000 * 26, history: rv },
-          { name: '🏦 SoFi Loan', startDate: '2025-08-20', startBalance: -30_000_000, balance: sofi[sofi.length - 1]!.balance, paidIn: 1_090_000 * 12, history: sofi },
+          { name: '🏦 SoFi Loan', startDate: '2025-08-20', startBalance: -30_000_000, balance: sofi[sofi.length - 1]!.balance, paidIn: 1_090_000 * 12, history: sofi, rate: 8.49, minimumPayment: 1_364_580 },
           { name: '🏛️ Checking', startDate: '2024-06-01', startBalance: 2_400_000, balance: 1_351_720, paidIn: 64_000_000, history: [] }
         ]
       },

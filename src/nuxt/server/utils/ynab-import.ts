@@ -200,7 +200,7 @@ export function parseYnabExportZip (bytes: Uint8Array): ParsedImport {
   return { name: planName, months, categoryCount: categoryIds.size, accounts }
 }
 
-function nextMonthKey (key: string): string {
+export function nextMonthKey (key: string): string {
   const [year, month] = key.split('-').map(Number)
   return month === 12 ? `${year! + 1}-01-01` : `${year}-${String(month! + 1).padStart(2, '0')}-01`
 }

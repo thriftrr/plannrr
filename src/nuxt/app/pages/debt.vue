@@ -12,6 +12,8 @@ interface SourceAccount {
   balance: number
   paidIn: number
   history: Array<{ month: string, balance: number }>
+  rate?: number
+  minimumPayment?: number
 }
 
 interface LoanRow extends SourceAccount {
@@ -34,6 +36,7 @@ const sourceCount = ref(0)
 const accountCount = ref(0)
 const isMock = ref(false)
 const loading = ref(true)
+const liveError = ref(false)
 const tweaks = ref<Record<string, Tweak>>({})
 
 onMounted(async () => {
@@ -45,7 +48,8 @@ onMounted(async () => {
     await refreshAuth()
     const status = await $fetch<{ mock: boolean }>('/api/ynab/status')
     isMock.value = status.mock
-    const data = await $fetch<{ sources: Array<{ planId: string, planName: string, accounts: SourceAccount[] }> }>('/api/ynab/debt')
+    const data = await $fetch<{ sources: Array<{ planId: string, planName: string, accounts: SourceAccount[] }>, live_error?: boolean }>('/api/ynab/debt')
+    liveError.value = Boolean(data.live_error)
     sourceCount.value = data.sources.length
     accountCount.value = data.sources.reduce((sum, source) => sum + source.accounts.length, 0)
     loans.value = data.sources
@@ -69,9 +73,11 @@ const tweakFor = (loan: LoanRow): Tweak => tweaks.value[loan.key] ?? {}
 const isOff = (loan: LoanRow) => Boolean(tweakFor(loan).off)
 const activeLoans = computed(() => loans.value.filter(loan => !isOff(loan)))
 
-// Default payment: average principal progress over the last few months of
-// history (underestimates by the interest share — the APR input closes it).
+// Default payment: the account's real minimum payment when the live API
+// provides it, else average principal progress over recent history (which
+// underestimates by the interest share — the APR input closes it).
 function defaultPayment (loan: LoanRow): number {
+  if (loan.minimumPayment && loan.minimumPayment > 0) return loan.minimumPayment
   const deltas: number[] = []
   for (let i = loan.history.length - 1; i > 0 && deltas.length < 4; i--) {
     const delta = loan.history[i]!.balance - loan.history[i - 1]!.balance
@@ -82,7 +88,7 @@ function defaultPayment (loan: LoanRow): number {
 }
 
 const paymentFor = (loan: LoanRow) => tweakFor(loan).payment ?? defaultPayment(loan)
-const rateFor = (loan: LoanRow) => tweakFor(loan).rate ?? 0
+const rateFor = (loan: LoanRow) => tweakFor(loan).rate ?? loan.rate ?? 0
 
 const todayMonth = computed(() => {
   let latest = ''
@@ -391,6 +397,11 @@ function onExtra (loan: LoanRow, event: Event) {
     </section>
 
     <template v-else>
+      <p v-if="liveError" class="status warn-strip">
+        Couldn't reach YNAB with your saved token just now — showing imported
+        history only. Live loans (with real APRs and minimum payments) will
+        appear once the token works.
+      </p>
       <section class="stats">
         <article>
           <h3>Total debt</h3>
@@ -580,9 +591,10 @@ function onExtra (loan: LoanRow, event: Event) {
       </section>
 
       <p class="footnote">
-        History is rebuilt from each export's register (payments in, starting
-        balances, month by month). YNAB exports don't carry interest rates or
-        minimum payments — set APR and Monthly here and they stick in this browser.
+        Imported plans rebuild history from each export's register; live YNAB
+        accounts (via your saved token) arrive with their real APR and minimum
+        payment pre-filled, refreshed every half hour. Anything you type in the
+        blue columns overrides the defaults and sticks in this browser.
       </p>
     </template>
   </main>
@@ -735,6 +747,15 @@ function onExtra (loan: LoanRow, event: Event) {
 }
 
 .payoff-strip.warn { background: #fff8e1; }
+
+.warn-strip {
+  margin: 1rem 0 0;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid #ffe08a;
+  background: #fff8e1;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
 
 .table-wrap { overflow-x: auto; }
 
