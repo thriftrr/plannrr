@@ -77,6 +77,14 @@ onMounted(async () => {
         </p>
       </article>
       <article>
+        <h2><NuxtLink to="/debt">Debt burndown →</NuxtLink></h2>
+        <p>
+          Every loan's history and the road to debt-free — snowball, avalanche,
+          custom orders, and a refinance calculator. Works with or without YNAB:
+          sync your budgets, or track debts entirely by hand.
+        </p>
+      </article>
+      <article>
         <h2>Calendar view</h2>
         <p>
           Bills and goal target dates on a calendar, with progress toward

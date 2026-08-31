@@ -342,22 +342,31 @@ function orderedLoans (key: StrategyKey): LoanRow[] {
   return active
 }
 
-function strategyResult (key: StrategyKey): { map: Map<string, PayoffProjection>, debtFree: string | null, interest: number } {
+interface JourneyLoan {
+  id: string
+  balance: number
+  annualRatePct: number
+  minimum: number
+  extraFirstMonth?: number
+}
+
+// One engine for every "how does the whole journey look" question — the
+// strategy cards and the refinance comparison both run through here.
+function runJourney (key: StrategyKey, loanSet: JourneyLoan[], customIds?: string[]): { map: Map<string, PayoffProjection>, debtFree: string | null, interest: number } {
   const start = todayMonth.value ? nextDebtMonth(todayMonth.value) : ''
   const map = new Map<string, PayoffProjection>()
-  if (!start || !activeLoans.value.length) return { map, debtFree: null, interest: 0 }
+  if (!start || !loanSet.length) return { map, debtFree: null, interest: 0 }
 
   if (key === 'minimum') {
     let latest: string | null = ''
     let interest = 0
-    for (const loan of activeLoans.value) {
-      const extra = extras.value[loan.id]
+    for (const loan of loanSet) {
       const projection = projectPayoff({
-        balance: -loan.balance,
-        annualRatePct: rateFor(loan),
-        payment: paymentFor(loan),
+        balance: loan.balance,
+        annualRatePct: loan.annualRatePct,
+        payment: loan.minimum,
         fromMonth: start,
-        extra: extra ? { month: start, amount: extra } : undefined
+        extra: loan.extraFirstMonth ? { month: start, amount: loan.extraFirstMonth } : undefined
       })
       map.set(loan.id, projection)
       interest += projection.interestTotal
@@ -367,20 +376,36 @@ function strategyResult (key: StrategyKey): { map: Map<string, PayoffProjection>
     return { map, debtFree: latest || null, interest }
   }
 
+  let ordered = loanSet
+  if (key === 'snowball') ordered = [...loanSet].sort((a, b) => a.balance - b.balance)
+  else if (key === 'avalanche') ordered = [...loanSet].sort((a, b) => (b.annualRatePct - a.annualRatePct) || (a.balance - b.balance))
+  else if (key === 'custom' && customIds) {
+    const byId = new Map(loanSet.map(loan => [loan.id, loan]))
+    const picked = customIds.map(id => byId.get(id)).filter((loan): loan is JourneyLoan => Boolean(loan))
+    const rest = loanSet.filter(loan => !customIds.includes(loan.id))
+    ordered = [...picked, ...rest]
+  }
+
   const result = projectSnowball({
-    loans: orderedLoans(key).map(loan => ({
-      id: loan.id,
-      balance: -loan.balance,
-      annualRatePct: rateFor(loan),
-      minimum: paymentFor(loan),
-      extraFirstMonth: extras.value[loan.id]
-    })),
+    loans: ordered,
     pool: snowballPool.value,
     order: 'given',
     fromMonth: start
   })
   for (const [id, projection] of Object.entries(result.perLoan)) map.set(id, projection)
   return { map, debtFree: result.debtFree, interest: result.interestTotal }
+}
+
+const toJourneyLoan = (loan: LoanRow): JourneyLoan => ({
+  id: loan.id,
+  balance: -loan.balance,
+  annualRatePct: rateFor(loan),
+  minimum: paymentFor(loan),
+  extraFirstMonth: extras.value[loan.id]
+})
+
+function strategyResult (key: StrategyKey): { map: Map<string, PayoffProjection>, debtFree: string | null, interest: number } {
+  return runJourney(key, activeLoans.value.map(toJourneyLoan), customOrderIds.value)
 }
 
 const strategyCards = computed(() =>
@@ -471,11 +496,7 @@ const editorReconcile = computed(() => {
 // ---- Refinance calculator -------------------------------------------------
 
 const refi = ref<null | {
-  id: string
-  name: string
-  balance: number
-  rate: number
-  payment: number
+  bundleIds: string[]
   newRate: string
   newPayment: string
   fee: string
@@ -485,11 +506,7 @@ const refi = ref<null | {
 
 function openRefi (loan: LoanRow) {
   refi.value = {
-    id: loan.id,
-    name: loan.name,
-    balance: -loan.balance,
-    rate: rateFor(loan),
-    payment: paymentFor(loan),
+    bundleIds: [loan.id],
     newRate: '',
     newPayment: (paymentFor(loan) / 1000).toFixed(2),
     fee: '0',
@@ -498,10 +515,33 @@ function openRefi (loan: LoanRow) {
   }
 }
 
+function toggleBundle (id: string) {
+  const model = refi.value
+  if (!model) return
+  model.bundleIds = model.bundleIds.includes(id)
+    ? model.bundleIds.filter(item => item !== id)
+    : [...model.bundleIds, id]
+}
+
+const refiBundle = computed(() =>
+  activeLoans.value.filter(loan => refi.value?.bundleIds.includes(loan.id))
+)
+
+function useBundleMinimums () {
+  const model = refi.value
+  if (!model) return
+  const combined = refiBundle.value.reduce((sum, loan) => sum + paymentFor(loan), 0)
+  model.newPayment = (combined / 1000).toFixed(2)
+}
+
+// Journey-level comparison: today's plan (current strategy + pool) versus
+// the same strategy with the bundled debts replaced by one new loan.
 const refiModel = computed(() => {
   const model = refi.value
   if (!model || !todayMonth.value) return null
-  const start = nextDebtMonth(todayMonth.value)
+  const bundle = refiBundle.value
+  if (!bundle.length) return null
+
   const money = (value: string) => {
     const parsed = Number.parseFloat(value.replace(/[$,]/g, ''))
     return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed * 1000) : 0
@@ -511,29 +551,55 @@ const refiModel = computed(() => {
   const cashOut = money(model.cashOut)
   const newPayment = money(model.newPayment)
 
-  const current = projectPayoff({
-    balance: model.balance,
-    annualRatePct: model.rate,
-    payment: model.payment,
-    fromMonth: start
-  })
+  const bundleBalance = bundle.reduce((sum, loan) => sum - loan.balance, 0)
+  const bundleMinimums = bundle.reduce((sum, loan) => sum + paymentFor(loan), 0)
+  const principal = bundleBalance + (model.feeRolled ? fee : 0) + cashOut
 
-  const principal = model.balance + (model.feeRolled ? fee : 0) + cashOut
-  const proposed = projectPayoff({
+  const remaining = activeLoans.value
+    .filter(loan => !model.bundleIds.includes(loan.id))
+    .map(toJourneyLoan)
+  const newLoan: JourneyLoan = {
+    id: '__refi__',
     balance: principal,
     annualRatePct: Number.isFinite(newRate) && newRate > 0 ? newRate : 0,
-    payment: newPayment,
-    fromMonth: start
-  })
+    minimum: newPayment
+  }
 
-  const currentCost = current.payoffMonth ? current.interestTotal : null
-  const proposedCost = proposed.payoffMonth ? proposed.interestTotal + fee : null
-  const savings = currentCost !== null && proposedCost !== null ? currentCost - proposedCost : null
-  const monthsSooner = current.payoffMonth && proposed.payoffMonth
-    ? monthDiff(proposed.payoffMonth, current.payoffMonth)
+  const key = settings.value.strategy
+  const currentJourney = selectedResult.value
+  const customIds = [
+    ...customOrderIds.value.filter(id => !model.bundleIds.includes(id)),
+    '__refi__'
+  ]
+  const newJourney = runJourney(key, [...remaining, newLoan], customIds)
+
+  const minsCurrent = totalMinimums.value
+  const minsNew = minsCurrent - bundleMinimums + newPayment
+
+  const currentCost = currentJourney.debtFree ? currentJourney.interest : null
+  const newCost = newJourney.debtFree ? newJourney.interest + fee : null
+  const savings = currentCost !== null && newCost !== null ? currentCost - newCost : null
+  const monthsSooner = currentJourney.debtFree && newJourney.debtFree
+    ? monthDiff(newJourney.debtFree, currentJourney.debtFree)
     : null
 
-  return { current, proposed, principal, fee, cashOut, savings, monthsSooner, currentCost, proposedCost }
+  return {
+    bundle,
+    bundleBalance,
+    bundleMinimums,
+    principal,
+    fee,
+    cashOut,
+    currentJourney,
+    newJourney,
+    newLoanPayoff: newJourney.map.get('__refi__')?.payoffMonth ?? null,
+    minsCurrent,
+    minsNew,
+    currentCost,
+    newCost,
+    savings,
+    monthsSooner
+  }
 })
 
 // ---- Row editor flyout ----------------------------------------------------
@@ -911,7 +977,8 @@ function onExtra (loan: LoanRow, event: Event) {
         </button>
       </template>
       <span v-else class="muted">
-        No budgets available — save a YNAB token or import a zip on
+        No YNAB connected — this page works fine without it (add debts by hand
+        below), or connect a token / import a zip on
         <NuxtLink to="/account">your account</NuxtLink>.
       </span>
       <span v-if="syncMessage" class="sync-msg">{{ syncMessage }}</span>
@@ -922,13 +989,18 @@ function onExtra (loan: LoanRow, event: Event) {
 
     <section v-else-if="!loans.length" class="status">
       <h2>No debts tracked yet</h2>
-      <p v-if="!authUser && !isMock && !syncPlans.length">
-        <NuxtLink to="/login">Sign in</NuxtLink>, connect a token or import an export
-        zip, then hit <em>Sync now</em> — or add debts by hand below.
+      <p v-if="!authUser && !isMock">
+        <NuxtLink to="/login">Sign in</NuxtLink> (just an email — no YNAB needed)
+        and add your debts by hand below. If you do use YNAB, connect a token or
+        import an export on your account page and <em>Sync now</em> pulls them in.
       </p>
-      <p v-else>
+      <p v-else-if="syncPlans.length">
         Hit <em>Sync now</em> above to pull loans from your budgets, or add one by
         hand below — paid-off debts welcome too.
+      </p>
+      <p v-else>
+        Add your debts by hand below — name, amount, dates — and everything here
+        works: the burndown, strategies, and the refinance tool. YNAB optional.
       </p>
     </section>
 
@@ -1225,18 +1297,42 @@ function onExtra (loan: LoanRow, event: Event) {
       </aside>
     </div>
 
-    <!-- Refinance calculator flyout -->
+    <!-- Refinance / consolidation calculator flyout -->
     <div v-if="refi" class="flyout-backdrop" @click.self="refi = null">
-      <aside class="flyout" role="dialog" aria-modal="true" aria-label="Refinance calculator">
+      <aside class="flyout" role="dialog" aria-modal="true" aria-label="Refinance and consolidation calculator">
         <header class="flyout-head">
-          <h2>Refinance {{ refi.name }}?</h2>
+          <h2>Refinance / consolidate</h2>
           <button class="reset" aria-label="Close" @click="refi = null">✕</button>
         </header>
         <p class="muted">
-          Compares this loan in isolation at fixed payments: today's
-          {{ fmt(refi.balance) }} at {{ refi.rate || 0 }}% APR and
-          {{ fmt(refi.payment) }}/mo versus a new loan paying it off.
+          Bundle any set of debts into one new loan, then see the whole journey —
+          your <strong>{{ strategyLabel.toLowerCase() }}</strong> plan{{ pooled ? ` with its ${fmt(snowballPool)} pool` : '' }} —
+          with the bundle replaced by the new loan.
         </p>
+
+        <ul class="bundle-list">
+          <li v-for="loan in activeLoans" :key="loan.id">
+            <label>
+              <input
+                type="checkbox"
+                :checked="refi.bundleIds.includes(loan.id)"
+                :aria-label="`Bundle ${loan.name}`"
+                @change="toggleBundle(loan.id)"
+              >
+              <span class="chip" :style="{ background: loan.color }" />
+              <span class="order-name">{{ loan.name }}</span>
+              <span class="order-balance">{{ fmt(-loan.balance) }}</span>
+              <span class="bundle-rate">{{ rateFor(loan) ? `${rateFor(loan)}%` : '—' }}</span>
+            </label>
+          </li>
+        </ul>
+        <p v-if="refiModel" class="muted bundle-sum">
+          Bundling {{ refiModel.bundle.length }} {{ refiModel.bundle.length === 1 ? 'debt' : 'debts' }}
+          · {{ fmt(refiModel.bundleBalance) }} balance
+          · {{ fmt(refiModel.bundleMinimums) }}/mo in current minimums
+          <button class="howto" @click="useBundleMinimums">use as new payment</button>
+        </p>
+
         <div class="edit-fields">
           <div class="edit-grid">
             <label>
@@ -1264,38 +1360,41 @@ function onExtra (loan: LoanRow, event: Event) {
 
         <div v-if="refiModel" class="refi-compare">
           <div class="refi-col">
-            <h3>Keep it</h3>
-            <p class="refi-big">{{ refiModel.current.payoffMonth ? dateLabel(refiModel.current.payoffMonth) : 'never at this payment' }}</p>
-            <p class="muted">{{ fmt(refi.payment) }}/mo · {{ refiModel.currentCost !== null ? `${fmt(refiModel.currentCost)} interest left` : 'interest keeps growing' }}</p>
+            <h3>Today's plan</h3>
+            <p class="refi-big">{{ refiModel.currentJourney.debtFree ? dateLabel(refiModel.currentJourney.debtFree) : 'never at these payments' }}</p>
+            <p class="muted">
+              {{ fmt(refiModel.minsCurrent) }}/mo minimums
+              · {{ refiModel.currentCost !== null ? `${fmt(refiModel.currentCost)} interest left` : 'interest keeps growing' }}
+            </p>
           </div>
           <div class="refi-col">
-            <h3>Refinance</h3>
-            <p class="refi-big">{{ refiModel.proposed.payoffMonth ? dateLabel(refiModel.proposed.payoffMonth) : 'never at this payment' }}</p>
+            <h3>With the new loan</h3>
+            <p class="refi-big">{{ refiModel.newJourney.debtFree ? dateLabel(refiModel.newJourney.debtFree) : 'never at these payments' }}</p>
             <p class="muted">
               {{ fmt(refiModel.principal) }} new principal
-              · {{ refiModel.proposedCost !== null ? `${fmt(refiModel.proposedCost)} interest + fee` : 'doesn’t amortize' }}
+              · {{ fmt(refiModel.minsNew) }}/mo minimums
+              · {{ refiModel.newCost !== null ? `${fmt(refiModel.newCost)} interest + fee` : 'doesn’t amortize' }}
             </p>
           </div>
         </div>
 
         <p v-if="refiModel" class="payoff-strip" :class="{ warn: refiModel.savings !== null && refiModel.savings < 0 }">
-          <template v-if="refiModel.savings === null && !refiModel.current.payoffMonth && refiModel.proposed.payoffMonth">
-            The current payment never clears this loan — the refinance makes it
-            actually payable, done {{ dateLabel(refiModel.proposed.payoffMonth) }}.
+          <template v-if="refiModel.savings === null && !refiModel.currentJourney.debtFree && refiModel.newJourney.debtFree">
+            Today's payments never clear everything — consolidating makes the whole
+            journey finish, debt-free {{ dateLabel(refiModel.newJourney.debtFree) }}.
           </template>
           <template v-else-if="refiModel.savings === null">
             One side never amortizes — raise its payment to compare.
           </template>
           <template v-else-if="refiModel.savings >= 0">
-            Refinancing saves <strong>{{ fmt(refiModel.savings) }}</strong> all-in
-            <template v-if="refiModel.monthsSooner && refiModel.monthsSooner > 0">
-              and finishes {{ refiModel.monthsSooner }} months sooner</template>.
+            This consolidation saves <strong>{{ fmt(refiModel.savings) }}</strong> all-in<template v-if="refiModel.monthsSooner && refiModel.monthsSooner > 0"> and the whole journey finishes {{ refiModel.monthsSooner }} months sooner</template>.
           </template>
           <template v-else>
-            Refinancing costs <strong>{{ fmt(-refiModel.savings) }}</strong> more all-in
-            <template v-if="refiModel.monthsSooner && refiModel.monthsSooner < 0">
-              and takes {{ -refiModel.monthsSooner }} months longer</template> — the fee
+            This consolidation costs <strong>{{ fmt(-refiModel.savings) }}</strong> more all-in<template v-if="refiModel.monthsSooner && refiModel.monthsSooner < 0"> and takes {{ -refiModel.monthsSooner }} months longer</template> — the fee
             and terms don't beat what you have.
+          </template>
+          <template v-if="refiModel.minsNew < refiModel.minsCurrent">
+            Required monthlies drop {{ fmt(refiModel.minsCurrent - refiModel.minsNew) }}/mo.
           </template>
           <template v-if="refiModel.cashOut > 0">
             (Cash-out of {{ fmt(refiModel.cashOut) }} excluded from the savings math.)
@@ -1869,4 +1968,40 @@ tr.off td { color: #a9b0bf; }
 }
 
 .refi-big { margin: 0; font-size: 1.05rem; font-weight: 600; }
+
+.bundle-list {
+  list-style: none;
+  margin: 0.2rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.bundle-list label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid #eee;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.bundle-list input { accent-color: #4a7dff; }
+.bundle-rate { min-width: 3.2rem; text-align: right; color: #777; font-size: 0.8rem; }
+.bundle-sum { margin: 0.1rem 0 0.2rem; }
+.bundle-sum .howto { margin-left: 0.4rem; }
+
+.howto {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 0.82rem;
+  color: #4a7dff;
+  cursor: pointer;
+  text-decoration: underline;
+}
 </style>
