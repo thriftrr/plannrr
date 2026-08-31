@@ -2,81 +2,174 @@
 const { user: authUser, refresh: refreshAuth } = useAuth()
 
 // Fixed categorical order (validated against the app surface); color follows
-// the loan, never its rank or the current selection.
+// the debt row, never its rank or the current selection.
 const PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948']
+const OVERFLOW_COLORS = ['#8b93a3', '#a8adb8', '#6f7789']
 
-interface SourceAccount {
+interface DebtRecord {
+  id: string
+  source: 'ynab' | 'import' | 'manual'
+  planName: string
   name: string
   startDate: string
+  endDate: string | null
   startBalance: number
   balance: number
   paidIn: number
+  rate: number | null
+  minimumPayment: number | null
   history: Array<{ month: string, balance: number }>
-  rate?: number
-  minimumPayment?: number
+  hidden: boolean
 }
 
-interface LoanRow extends SourceAccount {
-  key: string
-  planName: string
+interface LoanRow extends DebtRecord {
   color: string
 }
 
-interface Tweak {
-  off?: boolean
-  rate?: number
-  payment?: number
-  extra?: number
-}
+const EXTRAS_KEY = 'ynabrr:debt:extras'
+const SYNC_PLANS_KEY = 'ynabrr:debt:sync-plans'
 
-const TWEAKS_KEY = 'ynabrr:debt:tweaks'
-
-const loans = ref<LoanRow[]>([])
-const sourceCount = ref(0)
-const accountCount = ref(0)
+const debts = ref<DebtRecord[]>([])
 const isMock = ref(false)
 const loading = ref(true)
-const liveError = ref(false)
-const tweaks = ref<Record<string, Tweak>>({})
+const lastSynced = ref<string | null>(null)
+const extras = ref<Record<string, number>>({})
+
+const syncPlans = ref<Array<{ id: string, name: string, kind: 'live' | 'import' }>>([])
+const selectedPlanIds = ref<string[]>([])
+const syncing = ref(false)
+const syncMessage = ref('')
+
+const adding = ref(false)
+const addForm = ref({ name: '', original: '', balance: '0', startMonth: '', endMonth: '', rate: '', payment: '' })
+const addMessage = ref('')
 
 onMounted(async () => {
   try {
-    tweaks.value = JSON.parse(localStorage.getItem(TWEAKS_KEY) ?? '{}')
+    extras.value = JSON.parse(localStorage.getItem(EXTRAS_KEY) ?? '{}')
   } catch { /* fresh start */ }
 
-  try {
-    await refreshAuth()
-    const status = await $fetch<{ mock: boolean }>('/api/ynab/status')
-    isMock.value = status.mock
-    const data = await $fetch<{ sources: Array<{ planId: string, planName: string, accounts: SourceAccount[] }>, live_error?: boolean }>('/api/ynab/debt')
-    liveError.value = Boolean(data.live_error)
-    sourceCount.value = data.sources.length
-    accountCount.value = data.sources.reduce((sum, source) => sum + source.accounts.length, 0)
-    loans.value = data.sources
-      .flatMap(source => source.accounts
-        .filter(account => account.balance < 0 && account.history.length > 0)
-        .map(account => ({ ...account, key: `${source.planId}:${account.name}`, planName: source.planName, color: '' })))
-      .sort((a, b) => a.balance - b.balance)
-      .map((loan, index) => ({ ...loan, color: PALETTE[index % PALETTE.length]! }))
-  } catch { /* empty state below */ }
+  await refreshAuth()
+  await loadDebts()
+
+  if (!isMock.value) {
+    try {
+      const data = await $fetch<{ plans: typeof syncPlans.value }>('/api/debt/plans')
+      syncPlans.value = data.plans
+      let stored: string[] = []
+      try {
+        stored = JSON.parse(localStorage.getItem(SYNC_PLANS_KEY) ?? '[]')
+      } catch { /* default below */ }
+      const valid = stored.filter(id => data.plans.some(plan => plan.id === id))
+      selectedPlanIds.value = valid.length ? valid : data.plans.map(plan => plan.id)
+    } catch { /* sync bar just stays empty */ }
+  }
   loading.value = false
 })
 
-watch(tweaks, (value) => {
+async function loadDebts () {
+  try {
+    const data = await $fetch<{ mock: boolean, debts: DebtRecord[], lastSynced: string | null }>('/api/debt')
+    isMock.value = data.mock
+    debts.value = data.debts
+    lastSynced.value = data.lastSynced
+  } catch { /* empty state */ }
+}
+
+watch(extras, (value) => {
   if (!import.meta.client) return
   try {
-    localStorage.setItem(TWEAKS_KEY, JSON.stringify(value))
+    localStorage.setItem(EXTRAS_KEY, JSON.stringify(value))
   } catch { /* storage blocked */ }
 }, { deep: true })
 
-const tweakFor = (loan: LoanRow): Tweak => tweaks.value[loan.key] ?? {}
-const isOff = (loan: LoanRow) => Boolean(tweakFor(loan).off)
-const activeLoans = computed(() => loans.value.filter(loan => !isOff(loan)))
+function togglePlan (id: string) {
+  const current = selectedPlanIds.value
+  selectedPlanIds.value = current.includes(id)
+    ? current.filter(item => item !== id)
+    : [...current, id]
+  try {
+    localStorage.setItem(SYNC_PLANS_KEY, JSON.stringify(selectedPlanIds.value))
+  } catch { /* storage blocked */ }
+}
 
-// Default payment: the account's real minimum payment when the live API
-// provides it, else average principal progress over recent history (which
-// underestimates by the interest share — the APR input closes it).
-function defaultPayment (loan: LoanRow): number {
+async function syncNow () {
+  if (syncing.value || !selectedPlanIds.value.length) return
+  syncing.value = true
+  syncMessage.value = ''
+  try {
+    const result = await $fetch<{ created: number, updated: number, live_error: boolean }>('/api/debt/sync', {
+      method: 'POST',
+      body: { planIds: selectedPlanIds.value }
+    })
+    syncMessage.value = `${result.created} new · ${result.updated} refreshed${result.live_error ? ' · YNAB unreachable (token?)' : ''}`
+    await loadDebts()
+  } catch (cause: unknown) {
+    const err = cause as { data?: { statusMessage?: string } }
+    syncMessage.value = err.data?.statusMessage ?? 'Sync failed — try again.'
+  } finally {
+    syncing.value = false
+  }
+}
+
+async function addDebt () {
+  if (adding.value) return
+  adding.value = true
+  addMessage.value = ''
+  try {
+    await $fetch('/api/debt', {
+      method: 'POST',
+      body: {
+        name: addForm.value.name,
+        original: Number.parseFloat(addForm.value.original.replace(/[$,]/g, '')),
+        balance: Number.parseFloat(addForm.value.balance.replace(/[$,]/g, '') || '0'),
+        startMonth: addForm.value.startMonth,
+        endMonth: addForm.value.endMonth || undefined,
+        rate: addForm.value.rate ? Number.parseFloat(addForm.value.rate) : undefined,
+        payment: addForm.value.payment ? Number.parseFloat(addForm.value.payment.replace(/[$,]/g, '')) : undefined
+      }
+    })
+    addForm.value = { name: '', original: '', balance: '0', startMonth: '', endMonth: '', rate: '', payment: '' }
+    await loadDebts()
+  } catch (cause: unknown) {
+    const err = cause as { data?: { statusMessage?: string } }
+    addMessage.value = err.data?.statusMessage ?? 'Could not add that debt.'
+  } finally {
+    adding.value = false
+  }
+}
+
+async function patchRow (row: DebtRecord, patch: Record<string, unknown>) {
+  // `loans` rows are computed copies — mutate the source record for reactivity.
+  const target = debts.value.find(item => item.id === row.id)
+  if (target) Object.assign(target, patch)
+  try {
+    await $fetch(`/api/debt/${row.id}`, { method: 'PATCH', body: patch })
+  } catch { await loadDebts() }
+}
+
+async function removeRow (row: DebtRecord) {
+  await $fetch(`/api/debt/${row.id}`, { method: 'DELETE' })
+  delete extras.value[row.id]
+  await loadDebts()
+}
+
+// ---- Derived rows ---------------------------------------------------------
+
+const loans = computed<LoanRow[]>(() =>
+  debts.value.map((record, index) => ({
+    ...record,
+    color: index < PALETTE.length
+      ? PALETTE[index]!
+      : OVERFLOW_COLORS[(index - PALETTE.length) % OVERFLOW_COLORS.length]!
+  }))
+)
+
+const visibleLoans = computed(() => loans.value.filter(loan => !loan.hidden && loan.history.length > 0))
+const activeLoans = computed(() => visibleLoans.value.filter(loan => loan.balance < 0))
+const trophies = computed(() => visibleLoans.value.filter(loan => loan.balance >= 0))
+
+function derivedPayment (loan: LoanRow): number {
   if (loan.minimumPayment && loan.minimumPayment > 0) return loan.minimumPayment
   const deltas: number[] = []
   for (let i = loan.history.length - 1; i > 0 && deltas.length < 4; i--) {
@@ -87,12 +180,12 @@ function defaultPayment (loan: LoanRow): number {
   return Math.max(Math.round(-loan.balance * 0.02), 50_000)
 }
 
-const paymentFor = (loan: LoanRow) => tweakFor(loan).payment ?? defaultPayment(loan)
-const rateFor = (loan: LoanRow) => tweakFor(loan).rate ?? loan.rate ?? 0
+const paymentFor = (loan: LoanRow) => derivedPayment(loan)
+const rateFor = (loan: LoanRow) => loan.rate ?? 0
 
 const todayMonth = computed(() => {
   let latest = ''
-  for (const loan of loans.value) {
+  for (const loan of visibleLoans.value) {
     const last = loan.history[loan.history.length - 1]?.month ?? ''
     if (last > latest) latest = last
   }
@@ -104,8 +197,8 @@ const projections = computed(() => {
   const map = new Map<string, PayoffProjection>()
   if (!start) return map
   for (const loan of activeLoans.value) {
-    const extra = tweakFor(loan).extra
-    map.set(loan.key, projectPayoff({
+    const extra = extras.value[loan.id]
+    map.set(loan.id, projectPayoff({
       balance: -loan.balance,
       annualRatePct: rateFor(loan),
       payment: paymentFor(loan),
@@ -140,18 +233,18 @@ function monthDiff (a: string, b: string): number {
 }
 
 const chart = computed<ChartModel | null>(() => {
-  const active = activeLoans.value
-  if (!active.length || !todayMonth.value) return null
+  const rows = visibleLoans.value
+  if (!rows.length || !todayMonth.value) return null
 
   let firstMonth = todayMonth.value
-  for (const loan of active) {
+  for (const loan of rows) {
     const start = loan.history[0]?.month ?? todayMonth.value
     if (start < firstMonth) firstMonth = start
   }
 
   let lastMonth = nextDebtMonth(todayMonth.value)
-  for (const loan of active) {
-    const projection = projections.value.get(loan.key)
+  for (const loan of rows) {
+    const projection = projections.value.get(loan.id)
     const payoff = projection?.payoffMonth ?? projection?.months[projection.months.length - 1]
     if (payoff && payoff > lastMonth) lastMonth = payoff
   }
@@ -167,10 +260,9 @@ const chart = computed<ChartModel | null>(() => {
   }
   const todayIdx = months.indexOf(todayMonth.value)
 
-  // Per-loan magnitude per month: history with carry-forward, then projection.
-  const values = active.map((loan) => {
+  const values = rows.map((loan) => {
     const byMonth = new Map(loan.history.map(item => [item.month, item.balance]))
-    const projection = projections.value.get(loan.key)
+    const projection = projections.value.get(loan.id)
     const projByMonth = new Map((projection?.months ?? []).map((month, i) => [month, projection!.balances[i]!]))
     let carried = 0
     let started = false
@@ -198,7 +290,6 @@ const chart = computed<ChartModel | null>(() => {
   const x = (index: number) => CHART.left + (months.length === 1 ? 0 : (index / (months.length - 1)) * plotWidth)
   const y = (value: number) => CHART.top + plotHeight - (value / yMax) * plotHeight
 
-  // Stack bottom-up: cumulative sums in loan order.
   const cumulative: number[][] = []
   let running = months.map(() => 0)
   for (const series of values) {
@@ -219,7 +310,7 @@ const chart = computed<ChartModel | null>(() => {
     return `M${up.join('L')}L${down.reverse().join('L')}Z`
   }
 
-  const bands = active.map((loan, index) => ({
+  const bands = rows.map((loan, index) => ({
     loan,
     past: bandPath(index, 0, todayIdx),
     future: bandPath(index, todayIdx, months.length - 1)
@@ -230,11 +321,7 @@ const chart = computed<ChartModel | null>(() => {
     trackPoints.push(`${x(i).toFixed(1)},${y(totals[i]!).toFixed(1)}`)
   }
 
-  const yTicks = [0.25, 0.5, 0.75, 1].map((fraction) => ({
-    y: y(yMax * fraction),
-    label: fmtShort(yMax * fraction)
-  }))
-
+  const yTicks = [0.25, 0.5, 0.75, 1].map(f => ({ y: y(yMax * f), label: fmtShort(yMax * f) }))
   const step = Math.max(1, Math.round(months.length / 8))
   const xTicks: ChartModel['xTicks'] = []
   for (let i = 0; i < months.length; i += step) {
@@ -254,17 +341,16 @@ const chart = computed<ChartModel | null>(() => {
   }
 })
 
-function chartValueAt (loanKey: string, index: number): number {
+function chartValueAt (loanId: string, index: number): number {
   const model = chart.value
   if (!model) return 0
-  const bandIdx = model.bands.findIndex(band => band.loan.key === loanKey)
+  const bandIdx = model.bands.findIndex(band => band.loan.id === loanId)
   return bandIdx >= 0 ? model.values[bandIdx]![index] ?? 0 : 0
 }
 
 // ---- Hover ----------------------------------------------------------------
 
 const hoverIdx = ref<number | null>(null)
-const hoverX = ref(0)
 
 function onChartMove (event: MouseEvent) {
   const model = chart.value
@@ -275,7 +361,6 @@ function onChartMove (event: MouseEvent) {
   const plotWidth = CHART.width - CHART.left - CHART.right
   const fraction = Math.min(Math.max((px - CHART.left) / plotWidth, 0), 1)
   hoverIdx.value = Math.round(fraction * (model.months.length - 1))
-  hoverX.value = CHART.left + fraction * plotWidth
 }
 
 const hover = computed(() => {
@@ -296,18 +381,19 @@ const hover = computed(() => {
 // ---- Totals & formatting --------------------------------------------------
 
 const totalBalance = computed(() => activeLoans.value.reduce((sum, loan) => sum - loan.balance, 0))
-const totalPaidIn = computed(() => activeLoans.value.reduce((sum, loan) => sum + loan.paidIn, 0))
+const totalPaidIn = computed(() => visibleLoans.value.reduce((sum, loan) => sum + loan.paidIn, 0))
 const totalPayment = computed(() => activeLoans.value.reduce((sum, loan) => sum + paymentFor(loan), 0))
 const totalInterest = computed(() =>
-  activeLoans.value.reduce((sum, loan) => sum + (projections.value.get(loan.key)?.interestTotal ?? 0), 0)
+  activeLoans.value.reduce((sum, loan) => sum + (projections.value.get(loan.id)?.interestTotal ?? 0), 0)
 )
 const stuckLoans = computed(() =>
-  activeLoans.value.filter(loan => !projections.value.get(loan.key)?.payoffMonth)
+  activeLoans.value.filter(loan => !projections.value.get(loan.id)?.payoffMonth)
 )
 const debtFreeMonth = computed(() => {
+  if (!activeLoans.value.length) return null
   let latest: string | null = ''
   for (const loan of activeLoans.value) {
-    const payoff = projections.value.get(loan.key)?.payoffMonth
+    const payoff = projections.value.get(loan.id)?.payoffMonth
     if (!payoff) { latest = null; break }
     if (payoff > latest!) latest = payoff
   }
@@ -327,7 +413,7 @@ const shortMonth = (key: string) => {
   return `${date.toLocaleDateString('en-US', { month: 'short' })} '${String(date.getFullYear()).slice(2)}`
 }
 const dateLabel = (iso: string) =>
-  new Date(`${iso}T00:00:00`).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+  new Date(`${iso.slice(0, 10)}T00:00:00`).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
 
 const timeUntil = (payoff: string) => {
   const total = monthDiff(todayMonth.value, payoff)
@@ -338,25 +424,27 @@ const timeUntil = (payoff: string) => {
   return `${rem} mo`
 }
 
-// ---- Tweak handlers -------------------------------------------------------
+const syncedLabel = computed(() => {
+  if (!lastSynced.value) return ''
+  return new Date(lastSynced.value).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+})
 
-function updateTweak (loan: LoanRow, patch: Partial<Tweak>) {
-  tweaks.value[loan.key] = { ...tweakFor(loan), ...patch }
-}
+// ---- Row edit handlers ----------------------------------------------------
 
 function onRate (loan: LoanRow, event: Event) {
   const value = Number.parseFloat((event.target as HTMLInputElement).value)
-  updateTweak(loan, { rate: Number.isFinite(value) && value > 0 ? value : undefined })
+  patchRow(loan, { rate: Number.isFinite(value) && value > 0 ? value : null })
 }
 
 function onPayment (loan: LoanRow, event: Event) {
   const value = Number.parseFloat((event.target as HTMLInputElement).value.replace(/[$,]/g, ''))
-  updateTweak(loan, { payment: Number.isFinite(value) && value > 0 ? Math.round(value * 1000) : undefined })
+  patchRow(loan, { minimumPayment: Number.isFinite(value) && value > 0 ? Math.round(value * 1000) : null })
 }
 
 function onExtra (loan: LoanRow, event: Event) {
   const value = Number.parseFloat((event.target as HTMLInputElement).value.replace(/[$,]/g, ''))
-  updateTweak(loan, { extra: Number.isFinite(value) && value > 0 ? Math.round(value * 1000) : undefined })
+  if (Number.isFinite(value) && value > 0) extras.value[loan.id] = Math.round(value * 1000)
+  else delete extras.value[loan.id]
 }
 </script>
 
@@ -366,8 +454,8 @@ function onExtra (loan: LoanRow, event: Event) {
       <div>
         <h1><NuxtLink to="/">YNABRR</NuxtLink> <span class="crumb">/ Debt</span></h1>
         <p class="tagline">
-          Every loan's real history from your YNAB exports, then the road ahead —
-          tweak payments and rates to bend the curve.
+          Every loan's real history — synced from YNAB or added by hand — then
+          the road ahead. Tweak payments and rates to bend the curve.
         </p>
       </div>
       <nav class="nav">
@@ -378,52 +466,65 @@ function onExtra (loan: LoanRow, event: Event) {
       </nav>
     </header>
 
+    <section v-if="!isMock && !loading" class="sync-bar">
+      <span class="picker-label">Sync from</span>
+      <template v-if="syncPlans.length">
+        <label v-for="plan in syncPlans" :key="plan.id" class="pill" :class="{ on: selectedPlanIds.includes(plan.id) }">
+          <input type="checkbox" :checked="selectedPlanIds.includes(plan.id)" @change="togglePlan(plan.id)">
+          {{ plan.name }}
+        </label>
+        <button class="primary" :disabled="syncing || !selectedPlanIds.length" @click="syncNow">
+          {{ syncing ? 'Syncing…' : 'Sync now' }}
+        </button>
+      </template>
+      <span v-else class="muted">
+        No budgets available — save a YNAB token or import a zip on
+        <NuxtLink to="/account">your account</NuxtLink>.
+      </span>
+      <span v-if="syncMessage" class="sync-msg">{{ syncMessage }}</span>
+      <span v-else-if="syncedLabel" class="muted">last synced {{ syncedLabel }}</span>
+    </section>
+
     <p v-if="loading" class="status">Loading debt history…</p>
 
     <section v-else-if="!loans.length" class="status">
-      <h2>No debt history yet</h2>
-      <p v-if="!authUser && !isMock">
-        <NuxtLink to="/login">Sign in</NuxtLink> and import a YNAB export zip — the
-        register inside it carries every loan's balance history.
-      </p>
-      <p v-else-if="sourceCount && !accountCount">
-        Your imports predate account history — re-import your export zips on the
-        <NuxtLink to="/account">account page</NuxtLink> and loans will appear here.
+      <h2>No debts tracked yet</h2>
+      <p v-if="!authUser && !isMock && !syncPlans.length">
+        <NuxtLink to="/login">Sign in</NuxtLink>, connect a token or import an export
+        zip, then hit <em>Sync now</em> — or add debts by hand below.
       </p>
       <p v-else>
-        Import a YNAB export zip on the <NuxtLink to="/account">account page</NuxtLink> —
-        any account with a negative balance shows up here as a loan.
+        Hit <em>Sync now</em> above to pull loans from your budgets, or add one by
+        hand below — paid-off debts welcome too.
       </p>
     </section>
 
     <template v-else>
-      <p v-if="liveError" class="status warn-strip">
-        Couldn't reach YNAB with your saved token just now — showing imported
-        history only. Live loans (with real APRs and minimum payments) will
-        appear once the token works.
-      </p>
       <section class="stats">
         <article>
           <h3>Total debt</h3>
           <p>{{ fmt(totalBalance) }}</p>
-          <p class="sub">across {{ activeLoans.length }} {{ activeLoans.length === 1 ? 'loan' : 'loans' }}</p>
+          <p class="sub">across {{ activeLoans.length }} active {{ activeLoans.length === 1 ? 'loan' : 'loans' }}</p>
         </article>
         <article>
-          <h3>Paid so far</h3>
+          <h3>Paid down</h3>
           <p>{{ fmt(totalPaidIn) }}</p>
-          <p class="sub">since tracking began</p>
+          <p class="sub">
+            including {{ trophies.length }} paid-off {{ trophies.length === 1 ? 'debt' : 'debts' }}
+          </p>
         </article>
         <article>
           <h3>Monthly payments</h3>
           <p>{{ fmt(totalPayment) }}</p>
           <p class="sub">current plan, editable below</p>
         </article>
-        <article :class="{ negative: !debtFreeMonth }">
+        <article :class="{ negative: activeLoans.length && !debtFreeMonth }">
           <h3>Debt-free</h3>
-          <p>{{ debtFreeMonth ? monthLabel(debtFreeMonth) : '—' }}</p>
+          <p>{{ debtFreeMonth ? monthLabel(debtFreeMonth) : (activeLoans.length ? '—' : '🎉 already') }}</p>
           <p class="sub">
             <template v-if="debtFreeMonth">{{ timeUntil(debtFreeMonth) }} away · ~{{ fmt(totalInterest) }} interest to go</template>
-            <template v-else>some loans never amortize at these payments</template>
+            <template v-else-if="activeLoans.length">some loans never amortize at these payments</template>
+            <template v-else>nothing active — just trophies</template>
           </p>
         </article>
       </section>
@@ -437,62 +538,19 @@ function onExtra (loan: LoanRow, event: Event) {
           @mousemove="onChartMove"
           @mouseleave="hoverIdx = null"
         >
-          <line
-            v-for="tick in chart.yTicks"
-            :key="`y${tick.y}`"
-            :x1="CHART.left" :x2="CHART.width - CHART.right"
-            :y1="tick.y" :y2="tick.y"
-            class="grid"
-          />
-          <text
-            v-for="tick in chart.yTicks"
-            :key="`yl${tick.y}`"
-            :x="CHART.left - 8" :y="tick.y + 4"
-            class="tick" text-anchor="end"
-          >{{ tick.label }}</text>
-          <text
-            v-for="tick in chart.xTicks"
-            :key="`x${tick.x}`"
-            :x="tick.x" :y="CHART.height - 8"
-            class="tick" text-anchor="middle"
-          >{{ tick.label }}</text>
+          <line v-for="tick in chart.yTicks" :key="`y${tick.y}`" :x1="CHART.left" :x2="CHART.width - CHART.right" :y1="tick.y" :y2="tick.y" class="grid" />
+          <text v-for="tick in chart.yTicks" :key="`yl${tick.y}`" :x="CHART.left - 8" :y="tick.y + 4" class="tick" text-anchor="end">{{ tick.label }}</text>
+          <text v-for="tick in chart.xTicks" :key="`x${tick.x}`" :x="tick.x" :y="CHART.height - 8" class="tick" text-anchor="middle">{{ tick.label }}</text>
 
           <g>
-            <path
-              v-for="band in chart.bands"
-              :key="`p${band.loan.key}`"
-              :d="band.past"
-              :fill="band.loan.color"
-              class="band past"
-            />
-            <path
-              v-for="band in chart.bands"
-              :key="`f${band.loan.key}`"
-              :d="band.future"
-              :fill="band.loan.color"
-              class="band future"
-            />
+            <path v-for="band in chart.bands" :key="`p${band.loan.id}`" :d="band.past" :fill="band.loan.color" class="band past" />
+            <path v-for="band in chart.bands" :key="`f${band.loan.id}`" :d="band.future" :fill="band.loan.color" class="band future" />
           </g>
 
           <path v-if="chart.trackLine" :d="chart.trackLine" class="track" />
-          <line
-            v-if="chart.todayPoint"
-            :x1="chart.todayPoint.x" :x2="chart.todayPoint.x"
-            :y1="CHART.top" :y2="CHART.height - CHART.bottom"
-            class="today-line"
-          />
-          <circle
-            v-if="chart.todayPoint"
-            :cx="chart.todayPoint.x" :cy="chart.todayPoint.y" r="5"
-            class="today-dot"
-          />
-
-          <line
-            v-if="hover"
-            :x1="hover.x" :x2="hover.x"
-            :y1="CHART.top" :y2="CHART.height - CHART.bottom"
-            class="crosshair"
-          />
+          <line v-if="chart.todayPoint" :x1="chart.todayPoint.x" :x2="chart.todayPoint.x" :y1="CHART.top" :y2="CHART.height - CHART.bottom" class="today-line" />
+          <circle v-if="chart.todayPoint" :cx="chart.todayPoint.x" :cy="chart.todayPoint.y" r="5" class="today-dot" />
+          <line v-if="hover" :x1="hover.x" :x2="hover.x" :y1="CHART.top" :y2="CHART.height - CHART.bottom" class="crosshair" />
         </svg>
 
         <div
@@ -501,10 +559,10 @@ function onExtra (loan: LoanRow, event: Event) {
           :style="{ left: `${(hover.x / CHART.width) * 100}%`, transform: hover.alignRight ? 'translateX(-100%)' : 'none' }"
         >
           <p class="tip-title">{{ monthLabel(hover.month) }} <span class="tip-phase">{{ hover.phase }}</span></p>
-          <p v-for="band in chart!.bands" :key="band.loan.key" class="tip-row">
+          <p v-for="band in chart!.bands" :key="band.loan.id" class="tip-row">
             <span class="chip" :style="{ background: band.loan.color }" />
             <span class="tip-name">{{ band.loan.name }}</span>
-            <span class="tip-value">{{ fmt(chartValueAt(band.loan.key, hoverIdx)) }}</span>
+            <span class="tip-value">{{ fmt(chartValueAt(band.loan.id, hoverIdx)) }}</span>
           </p>
           <p class="tip-row tip-total">
             <span class="tip-name">Total</span>
@@ -513,9 +571,9 @@ function onExtra (loan: LoanRow, event: Event) {
         </div>
 
         <div class="legend">
-          <span v-for="loan in activeLoans" :key="loan.key" class="legend-item">
+          <span v-for="loan in visibleLoans" :key="loan.id" class="legend-item">
             <span class="chip" :style="{ background: loan.color }" />
-            {{ loan.name }}
+            {{ loan.name }}<template v-if="loan.balance >= 0"> ✓</template>
           </span>
           <span class="legend-item muted"><span class="chip solid" /> actual</span>
           <span class="legend-item muted"><span class="chip dashed" /> projected</span>
@@ -525,7 +583,7 @@ function onExtra (loan: LoanRow, event: Event) {
           Paying <strong>{{ fmt(totalPayment) }}</strong> a month clears everything by
           <strong>{{ monthLabel(debtFreeMonth) }}</strong> — {{ timeUntil(debtFreeMonth) }} from now.
         </p>
-        <p v-else class="payoff-strip warn">
+        <p v-else-if="stuckLoans.length" class="payoff-strip warn">
           {{ stuckLoans.map(loan => loan.name).join(', ') }}
           {{ stuckLoans.length === 1 ? "doesn't" : "don't" }} amortize at the current
           payment — raise the monthly amount below.
@@ -537,7 +595,7 @@ function onExtra (loan: LoanRow, event: Event) {
           <thead>
             <tr>
               <th />
-              <th class="name">Loan</th>
+              <th class="name">Debt</th>
               <th>Started</th>
               <th class="num">Original</th>
               <th class="num">Paid in</th>
@@ -547,56 +605,75 @@ function onExtra (loan: LoanRow, event: Event) {
               <th class="num edit">Extra next mo</th>
               <th>Payoff</th>
               <th class="num">Interest left</th>
+              <th />
             </tr>
           </thead>
           <tbody>
-            <tr v-for="loan in loans" :key="loan.key" :class="{ off: isOff(loan) }">
+            <tr v-for="loan in loans" :key="loan.id" :class="{ off: loan.hidden }">
               <td>
-                <input
-                  type="checkbox"
-                  :checked="!isOff(loan)"
-                  :aria-label="`Include ${loan.name}`"
-                  @change="updateTweak(loan, { off: !isOff(loan) || undefined })"
-                >
+                <input type="checkbox" :checked="!loan.hidden" :aria-label="`Include ${loan.name}`" @change="patchRow(loan, { hidden: !loan.hidden })">
               </td>
               <td class="name">
                 <span class="chip" :style="{ background: loan.color }" />
                 {{ loan.name }}
-                <span class="plan-name">{{ loan.planName }}</span>
+                <span class="plan-name">{{ loan.source === 'manual' ? 'manual' : loan.planName }}</span>
               </td>
-              <td>{{ dateLabel(loan.startDate) }}</td>
+              <td>{{ loan.startDate ? dateLabel(loan.startDate) : '—' }}</td>
               <td class="num">{{ fmt(-loan.startBalance) }}</td>
               <td class="num">{{ fmt(loan.paidIn) }}</td>
-              <td class="num strong">{{ fmt(-loan.balance) }}</td>
+              <td class="num strong">{{ loan.balance < 0 ? fmt(-loan.balance) : 'Paid ✓' }}</td>
               <td class="num edit">
-                <input type="text" inputmode="decimal" :value="rateFor(loan) || ''" placeholder="0" :disabled="isOff(loan)" @change="onRate(loan, $event)">
+                <input type="text" inputmode="decimal" :value="loan.rate ?? ''" placeholder="0" :aria-label="`APR for ${loan.name}`" :disabled="loan.hidden || loan.balance >= 0" @change="onRate(loan, $event)">
               </td>
               <td class="num edit">
-                <input type="text" inputmode="decimal" :value="(paymentFor(loan) / 1000).toFixed(2)" :disabled="isOff(loan)" @change="onPayment(loan, $event)">
+                <input type="text" inputmode="decimal" :value="loan.balance < 0 ? (paymentFor(loan) / 1000).toFixed(2) : ''" :aria-label="`Monthly payment for ${loan.name}`" :disabled="loan.hidden || loan.balance >= 0" @change="onPayment(loan, $event)">
               </td>
               <td class="num edit">
-                <input type="text" inputmode="decimal" :value="tweakFor(loan).extra ? (tweakFor(loan).extra! / 1000).toFixed(2) : ''" placeholder="0" :disabled="isOff(loan)" @change="onExtra(loan, $event)">
+                <input type="text" inputmode="decimal" :value="extras[loan.id] ? (extras[loan.id]! / 1000).toFixed(2) : ''" placeholder="0" :aria-label="`One-time extra payment for ${loan.name}`" :disabled="loan.hidden || loan.balance >= 0" @change="onExtra(loan, $event)">
               </td>
               <td>
-                <template v-if="isOff(loan)">—</template>
-                <template v-else-if="projections.get(loan.key)?.payoffMonth">{{ dateLabel(projections.get(loan.key)!.payoffMonth!) }}</template>
+                <template v-if="loan.balance >= 0">{{ loan.endDate ? dateLabel(loan.endDate) : 'Paid' }} 🏆</template>
+                <template v-else-if="loan.hidden">—</template>
+                <template v-else-if="projections.get(loan.id)?.payoffMonth">{{ dateLabel(projections.get(loan.id)!.payoffMonth!) }}</template>
                 <template v-else>never at this rate</template>
               </td>
               <td class="num">
-                {{ !isOff(loan) && projections.get(loan.key)?.payoffMonth ? fmt(projections.get(loan.key)!.interestTotal) : '—' }}
+                {{ loan.balance < 0 && !loan.hidden && projections.get(loan.id)?.payoffMonth ? fmt(projections.get(loan.id)!.interestTotal) : '—' }}
+              </td>
+              <td>
+                <button v-if="loan.source === 'manual' && !isMock" class="reset" title="Delete this debt" @click="removeRow(loan)">✕</button>
               </td>
             </tr>
           </tbody>
         </table>
       </section>
 
-      <p class="footnote">
-        Imported plans rebuild history from each export's register; live YNAB
-        accounts (via your saved token) arrive with their real APR and minimum
-        payment pre-filled, refreshed every half hour. Anything you type in the
-        blue columns overrides the defaults and sticks in this browser.
-      </p>
     </template>
+
+    <section v-if="!loading && !isMock" class="manage">
+      <h2>Add a debt by hand</h2>
+      <p class="muted">
+        Anything YNAB never saw — old loans included. Fully paid-off debts show
+        on the chart as history, so the mountain remembers what you've conquered.
+      </p>
+      <form class="add-form" @submit.prevent="addDebt">
+        <input v-model="addForm.name" placeholder="Name (🎓 Old Student Loans)" aria-label="Debt name" required>
+        <input v-model="addForm.original" placeholder="Original $" aria-label="Original amount" inputmode="decimal" required>
+        <input v-model="addForm.balance" placeholder="Balance now $ (0 = paid)" aria-label="Current balance" inputmode="decimal">
+        <input v-model="addForm.startMonth" type="month" aria-label="Started" required>
+        <input v-model="addForm.endMonth" type="month" aria-label="Paid off (optional)">
+        <input v-model="addForm.rate" placeholder="APR %" aria-label="APR" inputmode="decimal">
+        <input v-model="addForm.payment" placeholder="Monthly $" aria-label="Monthly payment" inputmode="decimal">
+        <button class="primary" type="submit" :disabled="adding">{{ adding ? 'Adding…' : 'Add debt' }}</button>
+      </form>
+      <p v-if="addMessage" class="muted">{{ addMessage }}</p>
+    </section>
+
+    <p v-if="!loading && loans.length" class="footnote">
+      Synced rows refresh from YNAB when you hit Sync (your APR and Monthly
+      edits survive). Manual rows chart a straight paydown between their two
+      known points. "Extra next mo" is a what-if that stays in this browser.
+    </p>
   </main>
 </template>
 
@@ -635,6 +712,54 @@ function onExtra (loan: LoanRow, event: Event) {
   font-size: 0.8rem;
 }
 
+.sync-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 1.1rem;
+}
+
+.picker-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #777;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.28rem 0.75rem;
+  border: 1px solid #ccc;
+  border-radius: 999px;
+  background: #fff;
+  font-size: 0.85rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.pill input { position: absolute; opacity: 0; pointer-events: none; }
+.pill.on { border-color: #4a7dff; background: #eef4ff; color: #2b52c7; }
+
+.primary {
+  padding: 0.35rem 0.9rem;
+  border: 1px solid #4a7dff;
+  border-radius: 6px;
+  background: #4a7dff;
+  color: #fff;
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.primary:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.sync-msg { font-size: 0.85rem; color: #1b7f3b; }
+.muted { color: #999; font-size: 0.85rem; }
+
 .status {
   margin: 2rem 0;
   padding: 1rem 1.25rem;
@@ -649,11 +774,7 @@ function onExtra (loan: LoanRow, event: Event) {
   margin: 1.5rem 0;
 }
 
-.stats article {
-  padding: 0.9rem 1.1rem;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-}
+.stats article { padding: 0.9rem 1.1rem; border: 1px solid #ddd; border-radius: 8px; }
 
 .stats h3 {
   margin: 0;
@@ -684,13 +805,7 @@ function onExtra (loan: LoanRow, event: Event) {
 .band.past { opacity: 0.85; stroke: #fff; stroke-width: 2; }
 .band.future { opacity: 0.28; stroke: #fff; stroke-width: 2; }
 
-.track {
-  fill: none;
-  stroke: #4a7dff;
-  stroke-width: 2;
-  stroke-dasharray: 6 5;
-}
-
+.track { fill: none; stroke: #4a7dff; stroke-width: 2; stroke-dasharray: 6 5; }
 .today-line { stroke: #c9d4f2; stroke-width: 1; stroke-dasharray: 2 3; }
 .today-dot { fill: #fff; stroke: #4a7dff; stroke-width: 2.5; }
 .crosshair { stroke: #b6b6b6; stroke-width: 1; }
@@ -716,13 +831,7 @@ function onExtra (loan: LoanRow, event: Event) {
 .tip-value { font-variant-numeric: tabular-nums; }
 .tip-total { border-top: 1px solid #eee; margin-top: 0.3rem; padding-top: 0.3rem; font-weight: 600; }
 
-.chip {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 3px;
-  flex: none;
-}
+.chip { display: inline-block; width: 10px; height: 10px; border-radius: 3px; flex: none; }
 
 .legend {
   display: flex;
@@ -748,22 +857,13 @@ function onExtra (loan: LoanRow, event: Event) {
 
 .payoff-strip.warn { background: #fff8e1; }
 
-.warn-strip {
-  margin: 1rem 0 0;
-  padding: 0.6rem 0.9rem;
-  border: 1px solid #ffe08a;
-  background: #fff8e1;
-  border-radius: 6px;
-  font-size: 0.9rem;
-}
-
 .table-wrap { overflow-x: auto; }
 
 table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.875rem;
-  min-width: 58rem;
+  min-width: 60rem;
 }
 
 thead th {
@@ -783,11 +883,7 @@ td.strong { font-weight: 600; }
 td.name { white-space: nowrap; }
 td.name .chip { margin-right: 0.4rem; }
 
-.plan-name {
-  margin-left: 0.45rem;
-  font-size: 0.72rem;
-  color: #999;
-}
+.plan-name { margin-left: 0.45rem; font-size: 0.72rem; color: #999; }
 
 th.edit, td.edit { background: #f7faff; }
 td.edit input {
@@ -804,6 +900,34 @@ td.edit input {
 td.edit input:disabled { background: #f3f5f9; border-color: #dde3f0; color: #a9b0bf; }
 
 tr.off td { color: #a9b0bf; }
+
+.reset { border: none; background: none; cursor: pointer; color: #4a7dff; font-size: 1rem; }
+
+.manage {
+  margin-top: 1.6rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+}
+
+.manage h2 { margin: 0 0 0.3rem; font-size: 1.05rem; }
+
+.add-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.7rem;
+}
+
+.add-form input {
+  padding: 0.4rem 0.55rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.875rem;
+}
+
+.add-form input:first-child { flex: 1 1 14rem; }
 
 .footnote { color: #999; font-size: 0.8rem; margin-top: 1rem; }
 </style>

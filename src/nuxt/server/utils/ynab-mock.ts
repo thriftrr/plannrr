@@ -215,30 +215,41 @@ const debtHistory = (startMonth: string, startBalance: number, monthlyPay: numbe
   return history
 }
 
-export function resolveMockDebtSources () {
+export function resolveMockDebtRecords () {
   const rv = debtHistory('2024-06-01', -19_591_080, 105_000, 27)
   const sofi = debtHistory('2025-08-01', -30_000_000, 1_090_000, 13)
   const truck = debtHistory('2025-03-01', -11_000_000, 250_000, 18)
-  return {
-    sources: [
-      {
-        planId: 'mock-plan-1',
-        planName: 'Mock Family Budget',
-        accounts: [
-          { name: '🚐 RV Loan', startDate: '2024-06-15', startBalance: -19_591_080, balance: rv[rv.length - 1]!.balance, paidIn: 105_000 * 26, history: rv },
-          { name: '🏦 SoFi Loan', startDate: '2025-08-20', startBalance: -30_000_000, balance: sofi[sofi.length - 1]!.balance, paidIn: 1_090_000 * 12, history: sofi, rate: 8.49, minimumPayment: 1_364_580 },
-          { name: '🏛️ Checking', startDate: '2024-06-01', startBalance: 2_400_000, balance: 1_351_720, paidIn: 64_000_000, history: [] }
-        ]
-      },
-      {
-        planId: 'mock-plan-2',
-        planName: 'Mock Partner Budget',
-        accounts: [
-          { name: '🛻 Truck Loan', startDate: '2025-03-03', startBalance: -11_000_000, balance: truck[truck.length - 1]!.balance, paidIn: 250_000 * 17, history: truck }
-        ]
-      }
-    ]
-  }
+  const student = debtHistory('2021-09-01', -14_000_000, 291_667, 49)
+  const record = (id: string, source: string, planName: string, name: string, extra: Record<string, unknown>) => ({
+    id,
+    source,
+    planName,
+    name,
+    endDate: null,
+    rate: null,
+    minimumPayment: null,
+    hidden: false,
+    updatedAt: '2026-08-30T12:00:00Z',
+    ...extra
+  })
+  return [
+    record('mock-debt-1', 'ynab', 'Mock Family Budget', '🏦 SoFi Loan', {
+      startDate: '2025-08-20', startBalance: -30_000_000, balance: sofi[sofi.length - 1]!.balance,
+      paidIn: 1_090_000 * 12, history: sofi, rate: 8.49, minimumPayment: 1_364_580
+    }),
+    record('mock-debt-2', 'ynab', 'Mock Family Budget', '🚐 RV Loan', {
+      startDate: '2024-06-15', startBalance: -19_591_080, balance: rv[rv.length - 1]!.balance,
+      paidIn: 105_000 * 26, history: rv
+    }),
+    record('mock-debt-3', 'ynab', 'Mock Partner Budget', '🛻 Truck Loan', {
+      startDate: '2025-03-03', startBalance: -11_000_000, balance: truck[truck.length - 1]!.balance,
+      paidIn: 250_000 * 17, history: truck
+    }),
+    record('mock-debt-4', 'manual', '', '🎓 Old Student Loans', {
+      startDate: '2021-09-01', endDate: '2025-09-01', startBalance: -14_000_000, balance: 0,
+      paidIn: 14_000_000, history: student
+    })
+  ]
 }
 
 export function resolveYnabMock (path: string): unknown {

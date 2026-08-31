@@ -8,6 +8,13 @@
       "when": 1788183347557,
       "tag": "0000_odd_black_bird",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1788186784013,
+      "tag": "0001_silky_grey_gargoyle",
+      "breakpoints": true
     }
   ]
 }

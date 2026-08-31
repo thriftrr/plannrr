@@ -91,15 +91,16 @@ export function buildLiveAccount (account: ApiAccount, transactions: ApiTransact
   }
 }
 
-export async function fetchLiveDebtSources (pat: string): Promise<DebtSource[]> {
+export async function fetchLiveDebtSources (pat: string, planIds?: string[]): Promise<DebtSource[]> {
   const now = new Date()
   const endMonth = `${now.toISOString().slice(0, 7)}-01`
   const sinceDate = `${now.getUTCFullYear() - Math.ceil(HISTORY_MONTHS / 12)}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`
 
   const { plans } = await ynabApi<{ plans: Array<{ id: string, name: string }> }>(pat, '/plans')
+  const selected = planIds ? plans.filter(plan => planIds.includes(plan.id)) : plans
   const sources: DebtSource[] = []
 
-  for (const plan of plans) {
+  for (const plan of selected) {
     const { accounts } = await ynabApi<{ accounts: ApiAccount[] }>(pat, `/plans/${plan.id}/accounts`)
     const debts = accounts.filter(account => !account.closed && !account.deleted && account.balance < 0)
     if (!debts.length) continue
