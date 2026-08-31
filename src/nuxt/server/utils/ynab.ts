@@ -1,4 +1,4 @@
-// Server-side YNAB client — the personal access token never reaches the browser.
+// YNAB API client — tokens never reach the browser.
 // API reference: https://api.ynab.com/
 const YNAB_API_BASE = 'https://api.ynab.com/v1'
 
@@ -7,26 +7,11 @@ type YnabFetchOptions = {
   body?: Record<string, unknown>
 }
 
-export async function ynabFetch<T> (path: string, options: YnabFetchOptions = {}): Promise<T> {
-  const { ynabPersonalAccessToken, ynabMock } = useRuntimeConfig()
-
-  // Mock mode short-circuits before any network call or token use.
-  if (ynabMock) {
-    return resolveYnabMock(path) as T
-  }
-
-  if (!ynabPersonalAccessToken) {
-    throw createError({
-      statusCode: 500,
-      statusMessage: 'YNAB token missing — set NUXT_YNAB_PERSONAL_ACCESS_TOKEN in src/nuxt/.env'
-    })
-  }
-
+export async function ynabApi<T> (token: string, path: string, options: YnabFetchOptions = {}): Promise<T> {
   const { data } = await $fetch<{ data: T }>(`${YNAB_API_BASE}${path}`, {
     ...options,
-    headers: { Authorization: `Bearer ${ynabPersonalAccessToken}` }
+    headers: { Authorization: `Bearer ${token}` }
   })
-
   return data
 }
 

@@ -10,6 +10,10 @@ const loading = ref(true)
 const connectError = ref(false)
 const isMock = ref(false)
 
+const { user: authUser, refresh: refreshAuth } = useAuth()
+const patError = ref(false)
+const noSources = ref(false)
+
 const INTRO_KEY = 'ynabrr:sandbox:intro'
 const SELECTED_KEY = 'ynabrr:sandbox:selected-plans'
 const COLLAPSED_PLANS_KEY = 'ynabrr:sandbox:collapsed-plans'
@@ -37,8 +41,16 @@ onMounted(async () => {
   try {
     const status = await $fetch<{ mock: boolean }>('/api/ynab/status')
     isMock.value = status.mock
-    const data = await $fetch<{ plans: PlanSummary[], default_plan: PlanSummary | null }>('/api/ynab/plans')
+    await refreshAuth()
+    const data = await $fetch<{ plans: PlanSummary[], default_plan: PlanSummary | null, pat_error?: boolean }>('/api/ynab/plans')
     plans.value = data.plans
+    patError.value = Boolean(data.pat_error)
+
+    if (!data.plans.length) {
+      noSources.value = true
+      loading.value = false
+      return
+    }
 
     let stored: string[] = []
     try {
@@ -639,6 +651,8 @@ const monthLabel = (value: string) =>
         </p>
       </div>
       <div class="pickers">
+        <NuxtLink v-if="authUser" class="howto" to="/account">{{ authUser.email }}</NuxtLink>
+        <NuxtLink v-else-if="!isMock" class="howto" to="/login">Sign in</NuxtLink>
         <button v-if="layoutCustomized" class="howto" title="Undo drag & drop rearrangement" @click="resetLayout">Reset layout</button>
         <button v-if="!showIntro" class="howto" @click="showIntro = true">How this works</button>
         <span v-if="isMock" class="badge" title="Serving built-in sample data — no YNAB account is being read">Mock data</span>
@@ -707,19 +721,25 @@ const monthLabel = (value: string) =>
       <button class="ghost" @click="dismissIntro">Got it</button>
     </section>
 
-    <section v-if="connectError" class="status">
-      <h2>Not connected</h2>
-      <p>
-        Copy <code>.env.example</code> to <code>.env</code> and set
-        <code>NUXT_YNAB_PERSONAL_ACCESS_TOKEN</code> with a token from
-        <a href="https://app.ynab.com/settings/developer">YNAB → Account Settings → Developer</a>,
-        then restart the dev server. Or run <code>make up-mock</code> to play with sample data.
+    <section v-if="connectError || noSources" class="status">
+      <h2>{{ connectError ? 'Something went wrong' : 'No budgets connected yet' }}</h2>
+      <p v-if="!authUser">
+        <NuxtLink to="/login">Sign in</NuxtLink> to import a YNAB export or connect your
+        own access token — or run <code>make up-mock</code> locally to play with sample data.
+      </p>
+      <p v-else>
+        Head to your <NuxtLink to="/account">account</NuxtLink> to import a YNAB export zip
+        or save a personal access token, then come back here.
       </p>
     </section>
 
     <p v-else-if="loading && !hasAnyDetail" class="status">Loading plans…</p>
 
     <template v-else>
+      <p v-if="patError" class="status warn">
+        Your saved YNAB token stopped working — live budgets are hidden.
+        Update it in <NuxtLink to="/account">your account</NuxtLink>.
+      </p>
       <section class="stats">
         <article>
           <h3>Income{{ incomeDelta !== 0 ? ' · scenario' : '' }}</h3>
@@ -1166,6 +1186,13 @@ const monthLabel = (value: string) =>
   padding: 1rem 1.25rem;
   border: 1px solid #ddd;
   border-radius: 8px;
+}
+
+.status.warn {
+  margin: 1rem 0 0;
+  border-color: #ffe08a;
+  background: #fff8e1;
+  font-size: 0.9rem;
 }
 
 /* Sticky so the totals stay visible while scrolling the table */

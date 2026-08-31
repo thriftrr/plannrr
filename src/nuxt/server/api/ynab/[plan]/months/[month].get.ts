@@ -1,7 +1,5 @@
-import type { MonthDetail } from '#shared/types/ynab'
-
 export default defineEventHandler(async (event) => {
-  const planId = getRouterParam(event, 'plan')
-  const month = getRouterParam(event, 'month')
-  return await ynabFetch<{ month: MonthDetail }>(`/plans/${planId}/months/${month}`)
+  const planId = getRouterParam(event, 'plan')!
+  const month = getRouterParam(event, 'month')!
+  return { month: await getMonthDetailForPlan(event, planId, month) }
 })

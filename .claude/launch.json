@@ -7,6 +7,20 @@
       "runtimeArgs": ["--prefix", "src/nuxt", "run", "dev:mock"],
       "port": 3000,
       "autoPort": true
+    },
+    {
+      "name": "ynabrr-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "src/nuxt", "run", "dev"],
+      "port": 3000,
+      "autoPort": true
+    },
+    {
+      "name": "ynabrr-test",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "src/nuxt", "run", "dev:test"],
+      "port": 3000,
+      "autoPort": true
     }
   ]
 }

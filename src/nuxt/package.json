@@ -6,11 +6,13 @@
     "build": "nuxt build",
     "dev": "nuxt dev",
     "dev:mock": "NUXT_YNAB_MOCK=1 nuxt dev",
+    "dev:test": "NUXT_YNAB_PERSONAL_ACCESS_TOKEN='' NUXT_YNAB_MOCK='' nuxt dev",
     "generate": "nuxt generate",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
+    "@libsql/client": "^0.17.4",
     "@nuxt/a11y": "^1.0.0-alpha.1",
     "@nuxt/fonts": "^0.14.0",
     "@nuxt/hints": "^1.1.4",
@@ -18,6 +20,10 @@
     "@nuxt/image": "^2.1.0",
     "@nuxt/test-utils": "^4.1.0",
     "@nuxthub/core": "^0.10.8",
+    "drizzle-kit": "^0.31.10",
+    "drizzle-orm": "^0.45.2",
+    "fflate": "^0.8.2",
+    "jose": "^6.0.11",
     "nuxt": "^4.5.2",
     "vue": "^3.5.41",
     "vue-router": "^5.2.0"
