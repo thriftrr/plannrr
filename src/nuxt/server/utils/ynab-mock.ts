@@ -230,6 +230,9 @@ export function resolveMockDebtRecords () {
     minimumPayment: null,
     userStartDate: null,
     userStartBalance: null,
+    userName: null,
+    userBalance: null,
+    userPaidIn: null,
     hidden: false,
     updatedAt: '2026-08-30T12:00:00Z',
     ...extra

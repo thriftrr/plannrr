@@ -20,6 +20,9 @@ interface DebtRecord {
   minimumPayment: number | null
   userStartDate: string | null
   userStartBalance: number | null
+  userName: string | null
+  userBalance: number | null
+  userPaidIn: number | null
   history: Array<{ month: string, balance: number }>
   hidden: boolean
 }
@@ -71,14 +74,17 @@ const editing = ref<null | {
   startMonth: string
   original: string
   balance: string
+  paidIn: string
   endMonth: string
   rate: string
   payment: string
+  included: boolean
   isManual: boolean
   isPaid: boolean
   hasOverride: boolean
-  syncedBalance: string
-  syncedPaidIn: string
+  baseName: string
+  baseBalance: number
+  basePaidIn: number
   planName: string
 }>(null)
 
@@ -240,7 +246,10 @@ const loans = computed<LoanRow[]>(() =>
     let paidIn = record.paidIn
     let startDate = record.startDate
     let startBalance = record.startBalance
-    const hasOverride = Boolean(record.userStartDate || record.userStartBalance != null)
+    const hasOverride = Boolean(
+      record.userStartDate || record.userStartBalance != null
+      || record.userName || record.userBalance != null || record.userPaidIn != null
+    )
 
     if (record.userStartDate || record.userStartBalance != null) {
       const overrideMonth = record.userStartDate ? `${record.userStartDate.slice(0, 7)}-01` : null
@@ -256,7 +265,26 @@ const loans = computed<LoanRow[]>(() =>
       }
     }
 
-    return { ...record, history, paidIn, startDate, startBalance, color, hasOverride }
+    // Balance override wins over the synced number — the chart's "today"
+    // point moves with it so history and projection stay continuous.
+    const balance = record.userBalance ?? record.balance
+    if (record.userBalance != null && history.length) {
+      const last = history[history.length - 1]!
+      history = [...history.slice(0, -1), { month: last.month, balance: record.userBalance }]
+    }
+    if (record.userPaidIn != null) paidIn = record.userPaidIn
+
+    return {
+      ...record,
+      name: record.userName ?? record.name,
+      balance,
+      history,
+      paidIn,
+      startDate,
+      startBalance,
+      color,
+      hasOverride
+    }
   })
 )
 
@@ -407,21 +435,31 @@ function openEditor (loan: LoanRow) {
   const raw = debts.value.find(item => item.id === loan.id)
   if (!raw) return
   const effectiveDate = raw.userStartDate ?? raw.startDate
-  const effectiveBalance = raw.userStartBalance ?? raw.startBalance
+  const effectiveOriginal = raw.userStartBalance ?? raw.startBalance
   editing.value = {
     id: raw.id,
-    name: raw.name,
+    name: raw.userName ?? raw.name,
     startMonth: effectiveDate ? effectiveDate.slice(0, 7) : '',
-    original: effectiveBalance ? (-effectiveBalance / 1000).toFixed(2) : '',
-    balance: (-raw.balance / 1000).toFixed(2),
+    original: effectiveOriginal ? (-effectiveOriginal / 1000).toFixed(2) : '',
+    balance: (-(raw.userBalance ?? raw.balance) / 1000).toFixed(2),
+    paidIn: ((loan.paidIn) / 1000).toFixed(2),
     endMonth: raw.endDate ? raw.endDate.slice(0, 7) : '',
     rate: raw.rate != null ? String(raw.rate) : '',
     payment: raw.minimumPayment != null ? (raw.minimumPayment / 1000).toFixed(2) : '',
+    included: !raw.hidden,
     isManual: raw.source === 'manual',
-    isPaid: raw.balance >= 0,
-    hasOverride: Boolean(raw.userStartDate || raw.userStartBalance != null),
-    syncedBalance: fmt(-raw.balance),
-    syncedPaidIn: fmt(raw.paidIn),
+    isPaid: (raw.userBalance ?? raw.balance) >= 0,
+    hasOverride: loan.hasOverride,
+    baseName: raw.name,
+    baseBalance: raw.balance,
+    // Paid-in before any explicit override (synced value + pre-tracking ramp)
+    basePaidIn: (() => {
+      let base = raw.paidIn
+      if ((raw.userStartDate || raw.userStartBalance != null) && raw.history[0]) {
+        base += Math.max(raw.history[0].balance - (raw.userStartBalance ?? raw.startBalance), 0)
+      }
+      return base
+    })(),
     planName: raw.planName
   }
 }
@@ -429,9 +467,12 @@ function openEditor (loan: LoanRow) {
 async function saveEditor () {
   const edit = editing.value
   if (!edit) return
-  const money = (raw: string) => Number.parseFloat(raw.replace(/[$,]/g, ''))
+  const raw = debts.value.find(item => item.id === edit.id)
+  if (!raw) { editing.value = null; return }
+  const money = (value: string) => Number.parseFloat(value.replace(/[$,]/g, ''))
   const rate = Number.parseFloat(edit.rate)
   const payment = money(edit.payment)
+  const paidInInput = money(edit.paidIn)
 
   if (edit.isManual) {
     const patch: Record<string, unknown> = {
@@ -442,16 +483,22 @@ async function saveEditor () {
         endMonth: edit.endMonth || null
       },
       rate: Number.isFinite(rate) && rate > 0 ? rate : null,
-      minimumPayment: Number.isFinite(payment) && payment > 0 ? Math.round(payment * 1000) : null
+      minimumPayment: Number.isFinite(payment) && payment > 0 ? Math.round(payment * 1000) : null,
+      hidden: !edit.included,
+      // Paid-in normally derives from original − balance; a differing entry
+      // becomes an explicit override.
+      userPaidIn: Number.isFinite(paidInInput) && Math.round(paidInInput * 1000) !== Math.max(money(edit.balance) * -1000 + money(edit.original) * 1000, 0)
+        ? Math.round(paidInInput * 1000)
+        : null
     }
     if (edit.name.trim()) patch.name = edit.name.trim()
     const target = debts.value.find(item => item.id === edit.id)
     if (isMock.value && target) {
-      // Mock is demo-only: apply the flat fields locally.
       Object.assign(target, {
         name: edit.name.trim() || target.name,
         rate: patch.rate,
-        minimumPayment: patch.minimumPayment
+        minimumPayment: patch.minimumPayment,
+        hidden: !edit.included
       })
     } else {
       try {
@@ -464,11 +511,21 @@ async function saveEditor () {
   }
 
   const original = money(edit.original)
+  const balanceInput = money(edit.balance)
+  const name = edit.name.trim()
   await patchRow({ id: edit.id }, {
     userStartDate: edit.startMonth ? `${edit.startMonth}-01` : null,
     userStartBalance: Number.isFinite(original) && original > 0 ? -Math.round(original * 1000) : null,
+    userName: name && name !== edit.baseName ? name : null,
+    userBalance: Number.isFinite(balanceInput) && -Math.round(balanceInput * 1000) !== edit.baseBalance
+      ? -Math.round(balanceInput * 1000)
+      : null,
+    userPaidIn: Number.isFinite(paidInInput) && Math.round(paidInInput * 1000) !== edit.basePaidIn
+      ? Math.round(paidInInput * 1000)
+      : null,
     rate: Number.isFinite(rate) && rate > 0 ? rate : null,
-    minimumPayment: Number.isFinite(payment) && payment > 0 ? Math.round(payment * 1000) : null
+    minimumPayment: Number.isFinite(payment) && payment > 0 ? Math.round(payment * 1000) : null,
+    hidden: !edit.included
   })
   editing.value = null
 }
@@ -476,7 +533,13 @@ async function saveEditor () {
 async function clearEditorOverride () {
   const edit = editing.value
   if (!edit) return
-  await patchRow({ id: edit.id }, { userStartDate: null, userStartBalance: null })
+  await patchRow({ id: edit.id }, {
+    userStartDate: null,
+    userStartBalance: null,
+    userName: null,
+    userBalance: null,
+    userPaidIn: null
+  })
   editing.value = null
 }
 
@@ -1059,27 +1122,27 @@ function onExtra (loan: LoanRow, event: Event) {
           redraws its paydown on the chart.
         </p>
         <p v-else class="muted">
-          Synced from <strong>{{ editing.planName }}</strong>. Balance and
-          payment history come from YNAB; start date, original amount, APR, and
-          monthly payment are yours to set and survive every sync.
+          Synced from <strong>{{ editing.planName }}</strong> — history refreshes
+          on sync, but everything you set here (name, balance, paid-in, start,
+          APR, monthly) is an override that survives every sync.
         </p>
         <div class="edit-fields">
-          <label v-if="editing.isManual">
+          <label>
             Name
             <input v-model="editing.name" aria-label="Debt name">
           </label>
-          <p v-else class="edit-fact">
-            <span>{{ editing.name }}</span>
-            <span class="muted">balance {{ editing.syncedBalance }} · paid in {{ editing.syncedPaidIn }} — synced from YNAB</span>
-          </p>
           <div class="edit-grid">
             <label>
               {{ editing.isManual ? 'Original amount $' : 'True original amount $' }}
               <input v-model="editing.original" inputmode="decimal" aria-label="Original amount">
             </label>
-            <label v-if="editing.isManual">
+            <label>
               Balance now $ (0 = paid)
               <input v-model="editing.balance" inputmode="decimal" aria-label="Current balance">
+            </label>
+            <label>
+              Paid in $
+              <input v-model="editing.paidIn" inputmode="decimal" aria-label="Paid in total">
             </label>
             <label>
               {{ editing.isManual ? 'Started' : 'Loan actually started' }}
@@ -1098,9 +1161,13 @@ function onExtra (loan: LoanRow, event: Event) {
               <input v-model="editing.payment" inputmode="decimal" aria-label="Monthly payment" :disabled="editing.isPaid">
             </label>
           </div>
+          <label class="edit-include">
+            <input v-model="editing.included" type="checkbox" aria-label="Include on the chart">
+            Include on the chart and in the math
+          </label>
         </div>
         <footer class="flyout-foot">
-          <button v-if="editing.hasOverride && !editing.isManual" class="ghost-btn" @click="clearEditorOverride">Reset start to synced</button>
+          <button v-if="editing.hasOverride && !editing.isManual" class="ghost-btn" @click="clearEditorOverride">Reset overrides to synced</button>
           <button class="primary" @click="saveEditor">Save</button>
         </footer>
       </aside>
@@ -1556,11 +1623,11 @@ tr.off td { color: #a9b0bf; }
   gap: 0.7rem;
 }
 
-.edit-fact {
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  font-size: 0.925rem;
+.edit-include {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.45rem !important;
 }
+
+.edit-include input { accent-color: #4a7dff; }
 </style>

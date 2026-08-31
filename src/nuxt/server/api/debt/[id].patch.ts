@@ -10,6 +10,9 @@ export default defineEventHandler(async (event) => {
     hidden?: boolean
     userStartDate?: string | null
     userStartBalance?: number | null
+    userName?: string | null
+    userBalance?: number | null
+    userPaidIn?: number | null
     manualShape?: {
       original?: number
       balance?: number
@@ -73,6 +76,21 @@ export default defineEventHandler(async (event) => {
     patch.userStartBalance = body!.userStartBalance === null
       ? null
       : Number.isFinite(Number(body!.userStartBalance)) ? Math.round(Number(body!.userStartBalance)) : null
+  }
+  if ('userName' in (body ?? {})) {
+    patch.userName = typeof body!.userName === 'string' && body!.userName.trim()
+      ? body!.userName.trim().slice(0, 120)
+      : null
+  }
+  if ('userBalance' in (body ?? {})) {
+    patch.userBalance = body!.userBalance === null
+      ? null
+      : Number.isFinite(Number(body!.userBalance)) ? Math.round(Number(body!.userBalance)) : null
+  }
+  if ('userPaidIn' in (body ?? {})) {
+    patch.userPaidIn = body!.userPaidIn === null
+      ? null
+      : Number.isFinite(Number(body!.userPaidIn)) ? Math.max(Math.round(Number(body!.userPaidIn)), 0) : null
   }
 
   if (!Object.keys(patch).length) {

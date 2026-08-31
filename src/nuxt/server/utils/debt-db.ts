@@ -22,6 +22,9 @@ export interface DebtRecord {
   minimumPayment: number | null
   userStartDate: string | null
   userStartBalance: number | null
+  userName: string | null
+  userBalance: number | null
+  userPaidIn: number | null
   history: DebtHistoryPoint[]
   hidden: boolean
   updatedAt: string | null
@@ -61,6 +64,9 @@ function toRecord (row: DebtRow): DebtRecord {
     minimumPayment: row.minimumPayment,
     userStartDate: row.userStartDate,
     userStartBalance: row.userStartBalance,
+    userName: row.userName,
+    userBalance: row.userBalance,
+    userPaidIn: row.userPaidIn,
     history,
     hidden: Boolean(row.hidden),
     updatedAt: row.updatedAt
@@ -222,7 +228,7 @@ export async function updateManualDebt (userId: string, id: string, input: {
   return rows.length > 0
 }
 
-const PATCHABLE = ['name', 'rate', 'minimumPayment', 'hidden', 'userStartDate', 'userStartBalance'] as const
+const PATCHABLE = ['name', 'rate', 'minimumPayment', 'hidden', 'userStartDate', 'userStartBalance', 'userName', 'userBalance', 'userPaidIn'] as const
 export type DebtPatch = Partial<Pick<DebtRecord, typeof PATCHABLE[number]>>
 
 export async function patchDebt (userId: string, id: string, patch: DebtPatch): Promise<boolean> {
@@ -233,6 +239,9 @@ export async function patchDebt (userId: string, id: string, patch: DebtPatch): 
   if (patch.hidden !== undefined) set.hidden = patch.hidden ? 1 : 0
   if (patch.userStartDate !== undefined) set.userStartDate = patch.userStartDate
   if (patch.userStartBalance !== undefined) set.userStartBalance = patch.userStartBalance
+  if (patch.userName !== undefined) set.userName = patch.userName
+  if (patch.userBalance !== undefined) set.userBalance = patch.userBalance
+  if (patch.userPaidIn !== undefined) set.userPaidIn = patch.userPaidIn
   const rows = await db.update(schema.debts).set(set)
     .where(and(eq(schema.debts.id, id), eq(schema.debts.userId, userId)))
     .returning({ id: schema.debts.id })

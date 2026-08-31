@@ -29,10 +29,13 @@ export const debts = sqliteTable('debts', {
   paidIn: integer('paid_in').notNull().default(0),
   rate: real('rate'),
   minimumPayment: integer('minimum_payment'),
-  // User overrides for when the loan really began (YNAB only knows when it
-  // was added); sync never touches these.
+  // User overrides (sync never touches these): when the loan really began,
+  // plus name/balance/paid-in corrections on synced rows.
   userStartDate: text('user_start_date'),
   userStartBalance: integer('user_start_balance'),
+  userName: text('user_name'),
+  userBalance: integer('user_balance'),
+  userPaidIn: integer('user_paid_in'),
   history: text('history').notNull().default('[]'),
   hidden: integer('hidden').notNull().default(0),
   updatedAt: text('updated_at'),
