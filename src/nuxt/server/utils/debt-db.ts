@@ -198,6 +198,36 @@ export async function deleteDebt (userId: string, id: string): Promise<boolean> 
   return rows.length > 0
 }
 
+// Payoff-strategy settings (snowball pool, extra, target order) persist per
+// owner in KV — small, single-row shaped, no migration needed.
+export interface DebtSettings {
+  strategy: 'separate' | 'snowball'
+  snowball: number
+  extra: number
+  order: 'balance' | 'rate'
+}
+
+export const defaultDebtSettings: DebtSettings = { strategy: 'separate', snowball: 0, extra: 0, order: 'balance' }
+
+const settingsKey = (owner: string) => `debt-settings:${owner}`
+
+export async function getDebtSettings (owner: string): Promise<DebtSettings> {
+  const stored = await kv.get<Partial<DebtSettings>>(settingsKey(owner))
+  return { ...defaultDebtSettings, ...stored }
+}
+
+export async function putDebtSettings (owner: string, input: Partial<DebtSettings>): Promise<DebtSettings> {
+  const current = await getDebtSettings(owner)
+  const next: DebtSettings = {
+    strategy: input.strategy === 'snowball' ? 'snowball' : input.strategy === 'separate' ? 'separate' : current.strategy,
+    snowball: Number.isFinite(Number(input.snowball)) ? Math.max(Math.round(Number(input.snowball)), 0) : current.snowball,
+    extra: Number.isFinite(Number(input.extra)) ? Math.max(Math.round(Number(input.extra)), 0) : current.extra,
+    order: input.order === 'rate' ? 'rate' : input.order === 'balance' ? 'balance' : current.order
+  }
+  await kv.set(settingsKey(owner), next)
+  return next
+}
+
 export async function lastSyncedAt (userId: string): Promise<string | null> {
   const rows = await db.select({ updatedAt: schema.debts.updatedAt }).from(schema.debts)
     .where(eq(schema.debts.userId, userId))

@@ -29,11 +29,19 @@ interface LoanRow extends DebtRecord {
 const EXTRAS_KEY = 'ynabrr:debt:extras'
 const SYNC_PLANS_KEY = 'ynabrr:debt:sync-plans'
 
+interface DebtSettings {
+  strategy: 'separate' | 'snowball'
+  snowball: number
+  extra: number
+  order: 'balance' | 'rate'
+}
+
 const debts = ref<DebtRecord[]>([])
 const isMock = ref(false)
 const loading = ref(true)
 const lastSynced = ref<string | null>(null)
 const extras = ref<Record<string, number>>({})
+const settings = ref<DebtSettings>({ strategy: 'separate', snowball: 0, extra: 0, order: 'balance' })
 
 const syncPlans = ref<Array<{ id: string, name: string, kind: 'live' | 'import' }>>([])
 const selectedPlanIds = ref<string[]>([])
@@ -69,11 +77,30 @@ onMounted(async () => {
 
 async function loadDebts () {
   try {
-    const data = await $fetch<{ mock: boolean, debts: DebtRecord[], lastSynced: string | null }>('/api/debt')
+    const data = await $fetch<{ mock: boolean, debts: DebtRecord[], lastSynced: string | null, settings?: DebtSettings }>('/api/debt')
     isMock.value = data.mock
     debts.value = data.debts
     lastSynced.value = data.lastSynced
+    if (data.settings) settings.value = data.settings
   } catch { /* empty state */ }
+}
+
+async function saveSettings (patch: Partial<DebtSettings>) {
+  settings.value = { ...settings.value, ...patch }
+  if (isMock.value) return
+  try {
+    await $fetch('/api/debt/settings', { method: 'PUT', body: patch })
+  } catch { /* keep local value; next load re-syncs */ }
+}
+
+function onPoolInput (field: 'snowball' | 'extra', event: Event) {
+  const value = Number.parseFloat((event.target as HTMLInputElement).value.replace(/[$,]/g, ''))
+  saveSettings({ [field]: Number.isFinite(value) && value > 0 ? Math.round(value * 1000) : 0 })
+}
+
+function onOrderChange (event: Event) {
+  const value = (event.target as HTMLSelectElement).value
+  saveSettings({ order: value === 'rate' ? 'rate' : 'balance' })
 }
 
 watch(extras, (value) => {
@@ -192,10 +219,31 @@ const todayMonth = computed(() => {
   return latest
 })
 
+const snowballActive = computed(() => settings.value.strategy === 'snowball')
+const snowballPool = computed(() => settings.value.snowball + settings.value.extra)
+
 const projections = computed(() => {
   const start = todayMonth.value ? nextDebtMonth(todayMonth.value) : ''
   const map = new Map<string, PayoffProjection>()
   if (!start) return map
+
+  if (snowballActive.value) {
+    const result = projectSnowball({
+      loans: activeLoans.value.map(loan => ({
+        id: loan.id,
+        balance: -loan.balance,
+        annualRatePct: rateFor(loan),
+        minimum: paymentFor(loan),
+        extraFirstMonth: extras.value[loan.id]
+      })),
+      pool: snowballPool.value,
+      order: settings.value.order,
+      fromMonth: start
+    })
+    for (const [id, projection] of Object.entries(result.perLoan)) map.set(id, projection)
+    return map
+  }
+
   for (const loan of activeLoans.value) {
     const extra = extras.value[loan.id]
     map.set(loan.id, projectPayoff({
@@ -382,7 +430,10 @@ const hover = computed(() => {
 
 const totalBalance = computed(() => activeLoans.value.reduce((sum, loan) => sum - loan.balance, 0))
 const totalPaidIn = computed(() => visibleLoans.value.reduce((sum, loan) => sum + loan.paidIn, 0))
-const totalPayment = computed(() => activeLoans.value.reduce((sum, loan) => sum + paymentFor(loan), 0))
+const totalMinimums = computed(() => activeLoans.value.reduce((sum, loan) => sum + paymentFor(loan), 0))
+const totalPayment = computed(() =>
+  snowballActive.value ? totalMinimums.value + snowballPool.value : totalMinimums.value
+)
 const totalInterest = computed(() =>
   activeLoans.value.reduce((sum, loan) => sum + (projections.value.get(loan.id)?.interestTotal ?? 0), 0)
 )
@@ -516,7 +567,10 @@ function onExtra (loan: LoanRow, event: Event) {
         <article>
           <h3>Monthly payments</h3>
           <p>{{ fmt(totalPayment) }}</p>
-          <p class="sub">current plan, editable below</p>
+          <p class="sub">
+            <template v-if="snowballActive">{{ fmt(totalMinimums) }} minimums + {{ fmt(snowballPool) }} snowball</template>
+            <template v-else>current plan, editable below</template>
+          </p>
         </article>
         <article :class="{ negative: activeLoans.length && !debtFreeMonth }">
           <h3>Debt-free</h3>
@@ -527,6 +581,43 @@ function onExtra (loan: LoanRow, event: Event) {
             <template v-else>nothing active — just trophies</template>
           </p>
         </article>
+      </section>
+
+      <section class="strategy-bar">
+        <span class="picker-label">Payoff strategy</span>
+        <div class="mode-pills">
+          <button :class="{ on: !snowballActive }" @click="saveSettings({ strategy: 'separate' })">Separate</button>
+          <button :class="{ on: snowballActive }" @click="saveSettings({ strategy: 'snowball' })">Snowball</button>
+        </div>
+        <template v-if="snowballActive">
+          <label class="pool-field">
+            Snowball
+            <input
+              type="text" inputmode="decimal"
+              :value="settings.snowball ? (settings.snowball / 1000).toFixed(2) : ''"
+              placeholder="0" aria-label="Monthly snowball amount"
+              title="Committed monthly amount on top of minimums — rolls to the next debt as each is paid off"
+              @change="onPoolInput('snowball', $event)"
+            >
+            /mo
+          </label>
+          <label class="pool-field">
+            Extra
+            <input
+              type="text" inputmode="decimal"
+              :value="settings.extra ? (settings.extra / 1000).toFixed(2) : ''"
+              placeholder="0" aria-label="Extra monthly what-if amount"
+              title="What-if: how much sooner with this much more per month?"
+              @change="onPoolInput('extra', $event)"
+            >
+            /mo
+          </label>
+          <select :value="settings.order" aria-label="Snowball target order" @change="onOrderChange">
+            <option value="balance">Smallest balance first</option>
+            <option value="rate">Highest APR first</option>
+          </select>
+        </template>
+        <span v-else class="muted">each loan pays its own monthly, independently</span>
       </section>
 
       <section v-if="chart" class="chart-card">
@@ -579,7 +670,12 @@ function onExtra (loan: LoanRow, event: Event) {
           <span class="legend-item muted"><span class="chip dashed" /> projected</span>
         </div>
 
-        <p v-if="debtFreeMonth" class="payoff-strip">
+        <p v-if="debtFreeMonth && snowballActive" class="payoff-strip">
+          Snowballing <strong>{{ fmt(snowballPool) }}</strong> on top of {{ fmt(totalMinimums) }} in minimums
+          clears everything by <strong>{{ monthLabel(debtFreeMonth) }}</strong> —
+          {{ timeUntil(debtFreeMonth) }} from now. As each loan falls, its payment rolls into the next.
+        </p>
+        <p v-else-if="debtFreeMonth" class="payoff-strip">
           Paying <strong>{{ fmt(totalPayment) }}</strong> a month clears everything by
           <strong>{{ monthLabel(debtFreeMonth) }}</strong> — {{ timeUntil(debtFreeMonth) }} from now.
         </p>
@@ -759,6 +855,64 @@ function onExtra (loan: LoanRow, event: Event) {
 
 .sync-msg { font-size: 0.85rem; color: #1b7f3b; }
 .muted { color: #999; font-size: 0.85rem; }
+
+.strategy-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  margin: 0 0 1rem;
+}
+
+.mode-pills {
+  display: inline-flex;
+  border: 1px solid #ccc;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.mode-pills button {
+  padding: 0.3rem 0.9rem;
+  border: none;
+  background: #fff;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  color: #555;
+}
+
+.mode-pills button.on {
+  background: #4a7dff;
+  color: #fff;
+}
+
+.pool-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.pool-field input {
+  width: 5.5rem;
+  padding: 0.3rem 0.45rem;
+  border: 1px solid #b9c9f5;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.85rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.strategy-bar select {
+  padding: 0.32rem 0.5rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  font: inherit;
+  font-size: 0.85rem;
+}
 
 .status {
   margin: 2rem 0;

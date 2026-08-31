@@ -14,6 +14,127 @@ export function nextDebtMonth (key: string): string {
   return month === 12 ? `${year! + 1}-01-01` : `${year}-${String(month! + 1).padStart(2, '0')}-01`
 }
 
+export interface SnowballLoanInput {
+  id: string
+  balance: number
+  annualRatePct: number
+  minimum: number
+  extraFirstMonth?: number
+}
+
+export interface SnowballResult {
+  perLoan: Record<string, PayoffProjection>
+  debtFree: string | null
+  interestTotal: number
+}
+
+// Debt snowball with rollover: every month the budget is the sum of ALL
+// minimums (paid-off loans keep contributing theirs — that's the snowball
+// rolling) plus the pool (snowball + extra). Minimums are paid first, then
+// the remainder cascades down the target order until it's spent.
+export function projectSnowball (options: {
+  loans: SnowballLoanInput[]
+  pool: number
+  order: 'balance' | 'rate'
+  fromMonth: string
+  capMonths?: number
+}): SnowballResult {
+  const cap = options.capMonths ?? 600
+  const ordered = [...options.loans].sort((a, b) => options.order === 'rate'
+    ? (b.annualRatePct - a.annualRatePct) || (a.balance - b.balance)
+    : (a.balance - b.balance))
+
+  const state = new Map(ordered.map(loan => [loan.id, {
+    balance: Math.max(loan.balance, 0),
+    interest: 0,
+    paid: 0,
+    months: [] as string[],
+    balances: [] as number[],
+    payoff: null as string | null
+  }]))
+
+  const minSum = options.loans.reduce((sum, loan) => sum + Math.max(loan.minimum, 0), 0)
+  let key = options.fromMonth
+  let debtFree: string | null = null
+  let prevTotal = Number.POSITIVE_INFINITY
+  let stall = 0
+
+  for (let i = 0; i < cap; i++) {
+    const extraSum = i === 0
+      ? options.loans.reduce((sum, loan) => sum + Math.max(loan.extraFirstMonth ?? 0, 0), 0)
+      : 0
+    let budget = minSum + Math.max(options.pool, 0) + extraSum
+
+    for (const loan of ordered) {
+      const slot = state.get(loan.id)!
+      if (slot.balance <= 0) continue
+      const interest = Math.round(slot.balance * Math.max(loan.annualRatePct, 0) / 100 / 12)
+      slot.balance += interest
+      slot.interest += interest
+    }
+
+    // Minimums first (plus any earmarked one-time extra in the first month)
+    for (const loan of ordered) {
+      const slot = state.get(loan.id)!
+      if (slot.balance <= 0) continue
+      const floor = Math.max(loan.minimum, 0) + (i === 0 ? Math.max(loan.extraFirstMonth ?? 0, 0) : 0)
+      const pay = Math.min(floor, slot.balance, budget)
+      slot.balance -= pay
+      slot.paid += pay
+      budget -= pay
+    }
+
+    // Waterfall the rest down the target order
+    for (const loan of ordered) {
+      if (budget <= 0) break
+      const slot = state.get(loan.id)!
+      if (slot.balance <= 0) continue
+      const pay = Math.min(budget, slot.balance)
+      slot.balance -= pay
+      slot.paid += pay
+      budget -= pay
+    }
+
+    let total = 0
+    for (const loan of ordered) {
+      const slot = state.get(loan.id)!
+      slot.months.push(key)
+      slot.balances.push(slot.balance)
+      if (slot.balance <= 0 && !slot.payoff) slot.payoff = key
+      total += slot.balance
+    }
+
+    if (total <= 0) {
+      debtFree = key
+      break
+    }
+    if (total >= prevTotal) {
+      stall++
+      if (stall >= 2) break
+    } else {
+      stall = 0
+    }
+    prevTotal = total
+    key = nextDebtMonth(key)
+  }
+
+  const perLoan: Record<string, PayoffProjection> = {}
+  let interestTotal = 0
+  for (const loan of ordered) {
+    const slot = state.get(loan.id)!
+    interestTotal += slot.interest
+    perLoan[loan.id] = {
+      months: slot.months,
+      balances: slot.balances,
+      payoffMonth: slot.payoff,
+      interestTotal: slot.interest,
+      paidTotal: slot.paid
+    }
+  }
+
+  return { perLoan, debtFree, interestTotal }
+}
+
 export function projectPayoff (options: {
   balance: number
   annualRatePct: number
