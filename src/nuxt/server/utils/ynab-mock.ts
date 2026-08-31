@@ -200,6 +200,47 @@ function mockCategoryGroups (categories: Category[]): CategoryGroupWithCategorie
   return groups
 }
 
+// ---- Mock debt histories (for the /debt page demo) -------------------------
+
+const debtHistory = (startMonth: string, startBalance: number, monthlyPay: number, count: number) => {
+  const history: Array<{ month: string, balance: number }> = []
+  let [year, month] = startMonth.split('-').map(Number) as [number, number]
+  let balance = startBalance
+  for (let i = 0; i < count; i++) {
+    history.push({ month: `${year}-${String(month).padStart(2, '0')}-01`, balance })
+    balance = Math.min(balance + monthlyPay, 0)
+    month++
+    if (month > 12) { month = 1; year++ }
+  }
+  return history
+}
+
+export function resolveMockDebtSources () {
+  const rv = debtHistory('2024-06-01', -19_591_080, 105_000, 27)
+  const sofi = debtHistory('2025-08-01', -30_000_000, 1_090_000, 13)
+  const truck = debtHistory('2025-03-01', -11_000_000, 250_000, 18)
+  return {
+    sources: [
+      {
+        planId: 'mock-plan-1',
+        planName: 'Mock Family Budget',
+        accounts: [
+          { name: '🚐 RV Loan', startDate: '2024-06-15', startBalance: -19_591_080, balance: rv[rv.length - 1]!.balance, paidIn: 105_000 * 26, history: rv },
+          { name: '🏦 SoFi Loan', startDate: '2025-08-20', startBalance: -30_000_000, balance: sofi[sofi.length - 1]!.balance, paidIn: 1_090_000 * 12, history: sofi },
+          { name: '🏛️ Checking', startDate: '2024-06-01', startBalance: 2_400_000, balance: 1_351_720, paidIn: 64_000_000, history: [] }
+        ]
+      },
+      {
+        planId: 'mock-plan-2',
+        planName: 'Mock Partner Budget',
+        accounts: [
+          { name: '🛻 Truck Loan', startDate: '2025-03-03', startBalance: -11_000_000, balance: truck[truck.length - 1]!.balance, paidIn: 250_000 * 17, history: truck }
+        ]
+      }
+    ]
+  }
+}
+
 export function resolveYnabMock (path: string): unknown {
   if (path === '/plans') {
     return {

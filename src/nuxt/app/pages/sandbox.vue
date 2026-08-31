@@ -651,6 +651,7 @@ const monthLabel = (value: string) =>
         </p>
       </div>
       <div class="pickers">
+        <NuxtLink class="howto" to="/debt">Debt</NuxtLink>
         <NuxtLink v-if="authUser" class="howto" to="/account">{{ authUser.email }}</NuxtLink>
         <NuxtLink v-else-if="!isMock" class="howto" to="/login">Sign in</NuxtLink>
         <button v-if="layoutCustomized" class="howto" title="Undo drag & drop rearrangement" @click="resetLayout">Reset layout</button>

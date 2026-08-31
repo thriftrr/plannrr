@@ -28,6 +28,7 @@ onMounted(async () => {
       </div>
       <nav class="nav">
         <NuxtLink to="/sandbox">Sandbox</NuxtLink>
+        <NuxtLink to="/debt">Debt</NuxtLink>
         <NuxtLink v-if="user" to="/account">{{ user.email }}</NuxtLink>
         <NuxtLink v-else to="/login" class="cta">Sign in</NuxtLink>
       </nav>

@@ -17,10 +17,20 @@ export interface ImportedMonthCategory {
   balance: number
 }
 
+export interface ImportedAccount {
+  name: string
+  startDate: string
+  startBalance: number
+  balance: number
+  paidIn: number
+  history: Array<{ month: string, balance: number }>
+}
+
 export interface ParsedImport {
   name: string
   months: Record<string, { income: number, categories: ImportedMonthCategory[] }>
   categoryCount: number
+  accounts?: ImportedAccount[]
 }
 
 const MONTHS: Record<string, string> = {
@@ -139,20 +149,47 @@ export function parseYnabExportZip (bytes: Uint8Array): ParsedImport {
     for (const row of kept) categoryIds.add(row.id)
   }
 
+  let accounts: ImportedAccount[] = []
   if (registerEntry) {
     const registerRows = parseCsv(decoder.decode(files[registerEntry]!))
     const [registerHeader, ...transactions] = registerRows
+    const accountIdx = registerHeader?.indexOf('Account') ?? -1
+    const payeeIdx = registerHeader?.indexOf('Payee') ?? -1
     const combinedIdx = registerHeader?.indexOf('Category Group/Category') ?? -1
     const dateIdx = registerHeader?.indexOf('Date') ?? -1
+    const outflowIdx = registerHeader?.indexOf('Outflow') ?? -1
     const inflowIdx = registerHeader?.indexOf('Inflow') ?? -1
+
     if (combinedIdx >= 0 && dateIdx >= 0 && inflowIdx >= 0) {
+      const txByAccount = new Map<string, Array<{ date: string, payee: string, amount: number }>>()
+
       for (const row of transactions) {
-        if (row[combinedIdx] !== 'Inflow: Ready to Assign') continue
-        const date = /(\d{2})\/\d{2}\/(\d{4})/.exec(row[dateIdx] ?? '')
+        const date = /(\d{2})\/(\d{2})\/(\d{4})/.exec(row[dateIdx] ?? '')
         if (!date) continue
-        const key = `${date[2]}-${date[1]}-01`
-        if (months[key]) months[key].income += parseMoney(row[inflowIdx] ?? '')
+        const monthKeyOfTx = `${date[3]}-${date[1]}-01`
+        const inflow = parseMoney(row[inflowIdx] ?? '')
+
+        if (row[combinedIdx] === 'Inflow: Ready to Assign' && months[monthKeyOfTx]) {
+          months[monthKeyOfTx].income += inflow
+        }
+
+        if (accountIdx >= 0 && outflowIdx >= 0) {
+          const account = row[accountIdx]?.trim()
+          if (!account) continue
+          let list = txByAccount.get(account)
+          if (!list) {
+            list = []
+            txByAccount.set(account, list)
+          }
+          list.push({
+            date: `${date[3]}-${date[1]}-${date[2]}`,
+            payee: row[payeeIdx]?.trim() ?? '',
+            amount: inflow - parseMoney(row[outflowIdx] ?? '')
+          })
+        }
       }
+
+      accounts = buildAccountHistories(txByAccount)
     }
   }
 
@@ -160,7 +197,61 @@ export function parseYnabExportZip (bytes: Uint8Array): ParsedImport {
     throw createError({ statusCode: 400, statusMessage: 'No monthly data found in that export' })
   }
 
-  return { name: planName, months, categoryCount: categoryIds.size }
+  return { name: planName, months, categoryCount: categoryIds.size, accounts }
+}
+
+function nextMonthKey (key: string): string {
+  const [year, month] = key.split('-').map(Number)
+  return month === 12 ? `${year! + 1}-01-01` : `${year}-${String(month! + 1).padStart(2, '0')}-01`
+}
+
+// Rebuild each account's balance-over-time from its transactions (YNAB
+// registers open with a "Starting Balance" row, so the running sum is the
+// true balance), snapshotted at end of month and carried forward to the
+// export's last month so every account covers the same time axis.
+function buildAccountHistories (txByAccount: Map<string, Array<{ date: string, payee: string, amount: number }>>): ImportedAccount[] {
+  let globalEndMonth = ''
+  for (const txs of txByAccount.values()) {
+    for (const tx of txs) {
+      const key = `${tx.date.slice(0, 7)}-01`
+      if (key > globalEndMonth) globalEndMonth = key
+    }
+  }
+  if (!globalEndMonth) return []
+
+  const accounts: ImportedAccount[] = []
+  for (const [name, txs] of txByAccount) {
+    txs.sort((a, b) => a.date.localeCompare(b.date))
+    const endOfMonth: Record<string, number> = {}
+    let running = 0
+    let paidIn = 0
+    let startBalance = 0
+    for (const tx of txs) {
+      running += tx.amount
+      if (tx.payee === 'Starting Balance') startBalance += tx.amount
+      else if (tx.amount > 0) paidIn += tx.amount
+      endOfMonth[`${tx.date.slice(0, 7)}-01`] = running
+    }
+
+    const startMonth = `${txs[0]!.date.slice(0, 7)}-01`
+    const history: ImportedAccount['history'] = []
+    let carried = 0
+    for (let key = startMonth; key <= globalEndMonth; key = nextMonthKey(key)) {
+      if (key in endOfMonth) carried = endOfMonth[key]!
+      history.push({ month: key, balance: carried })
+      if (history.length > 600) break
+    }
+
+    accounts.push({
+      name,
+      startDate: txs[0]!.date,
+      startBalance,
+      balance: running,
+      paidIn,
+      history
+    })
+  }
+  return accounts.sort((a, b) => a.balance - b.balance)
 }
 
 // ---- Adapters into the shapes the sandbox already speaks ------------------
