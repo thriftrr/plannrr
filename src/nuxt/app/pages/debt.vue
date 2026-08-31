@@ -429,6 +429,113 @@ function onOrderDrop (dropIdx: number) {
   commitOrder(ids)
 }
 
+// ---- Reconciliation -------------------------------------------------------
+// original − paid in should equal the balance. Higher-than-expected balance
+// is usually accrued interest/fees (informational); lower is a data error.
+
+function reconcile (loan: { startBalance: number, balance: number, paidIn: number }) {
+  const original = -loan.startBalance
+  if (original <= 0) return null
+  const expected = original - loan.paidIn
+  const actual = -loan.balance
+  return { expected, actual, gap: actual - expected }
+}
+
+function reconcileState (loan: { startBalance: number, balance: number, paidIn: number }): 'ok' | 'interest' | 'error' {
+  const result = reconcile(loan)
+  if (!result) return 'ok'
+  if (result.gap < -1_000) return 'error'
+  if (result.gap > Math.max(1_000, -loan.startBalance * 0.005)) return 'interest'
+  return 'ok'
+}
+
+const editorReconcile = computed(() => {
+  const edit = editing.value
+  if (!edit) return null
+  const money = (value: string) => Number.parseFloat(value.replace(/[$,]/g, ''))
+  const original = money(edit.original)
+  const balance = money(edit.balance)
+  const paidIn = money(edit.paidIn)
+  if (![original, balance, paidIn].every(Number.isFinite) || original <= 0) return null
+  const expected = original - paidIn
+  const gap = balance - expected
+  if (Math.abs(gap) <= 1) {
+    return { tone: 'ok', text: `✓ These line up: ${usd.format(original)} − ${usd.format(paidIn)} paid = ${usd.format(balance)}` }
+  }
+  if (gap < 0) {
+    return { tone: 'error', text: `⚠ Doesn't add up: original − paid in = ${usd.format(expected)}, but the balance is ${usd.format(balance)} — ${usd.format(-gap)} more paid than the loan shrank. Check the numbers.` }
+  }
+  return { tone: 'info', text: `Balance runs ${usd.format(gap)} above original − paid in — that's usually accrued interest and fees.` }
+})
+
+// ---- Refinance calculator -------------------------------------------------
+
+const refi = ref<null | {
+  id: string
+  name: string
+  balance: number
+  rate: number
+  payment: number
+  newRate: string
+  newPayment: string
+  fee: string
+  feeRolled: boolean
+  cashOut: string
+}>(null)
+
+function openRefi (loan: LoanRow) {
+  refi.value = {
+    id: loan.id,
+    name: loan.name,
+    balance: -loan.balance,
+    rate: rateFor(loan),
+    payment: paymentFor(loan),
+    newRate: '',
+    newPayment: (paymentFor(loan) / 1000).toFixed(2),
+    fee: '0',
+    feeRolled: true,
+    cashOut: '0'
+  }
+}
+
+const refiModel = computed(() => {
+  const model = refi.value
+  if (!model || !todayMonth.value) return null
+  const start = nextDebtMonth(todayMonth.value)
+  const money = (value: string) => {
+    const parsed = Number.parseFloat(value.replace(/[$,]/g, ''))
+    return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed * 1000) : 0
+  }
+  const newRate = Number.parseFloat(model.newRate)
+  const fee = money(model.fee)
+  const cashOut = money(model.cashOut)
+  const newPayment = money(model.newPayment)
+
+  const current = projectPayoff({
+    balance: model.balance,
+    annualRatePct: model.rate,
+    payment: model.payment,
+    fromMonth: start
+  })
+
+  const principal = model.balance + (model.feeRolled ? fee : 0) + cashOut
+  const proposed = projectPayoff({
+    balance: principal,
+    annualRatePct: Number.isFinite(newRate) && newRate > 0 ? newRate : 0,
+    payment: newPayment,
+    fromMonth: start
+  })
+
+  const currentCost = current.payoffMonth ? current.interestTotal : null
+  const proposedCost = proposed.payoffMonth ? proposed.interestTotal + fee : null
+  const savings = currentCost !== null && proposedCost !== null ? currentCost - proposedCost : null
+  const monthsSooner = current.payoffMonth && proposed.payoffMonth
+    ? monthDiff(proposed.payoffMonth, current.payoffMonth)
+    : null
+
+  return { current, proposed, principal, fee, cashOut, savings, monthsSooner, currentCost, proposedCost }
+})
+
 // ---- Row editor flyout ----------------------------------------------------
 
 function openEditor (loan: LoanRow) {
@@ -1011,7 +1118,14 @@ function onExtra (loan: LoanRow, event: Event) {
                 <span v-if="loan.hasOverride" class="override-mark" title="Start adjusted by you — sync keeps it">*</span>
               </td>
               <td class="num">{{ fmt(-loan.startBalance) }}</td>
-              <td class="num">{{ fmt(loan.paidIn) }}</td>
+              <td class="num">
+                {{ fmt(loan.paidIn) }}
+                <span
+                  v-if="reconcileState(loan) === 'error'"
+                  class="recon-error"
+                  :title="`Doesn't add up: original − paid in = ${fmt(reconcile(loan)!.expected)}, but balance is ${fmt(reconcile(loan)!.actual)} — edit this row to fix`"
+                >⚠</span>
+              </td>
               <td class="num strong">{{ loan.balance < 0 ? fmt(-loan.balance) : 'Paid ✓' }}</td>
               <td class="num edit">
                 <input type="text" inputmode="decimal" :value="loan.rate ?? ''" placeholder="0" :aria-label="`APR for ${loan.name}`" :disabled="loan.hidden || loan.balance >= 0" @change="onRate(loan, $event)">
@@ -1032,7 +1146,8 @@ function onExtra (loan: LoanRow, event: Event) {
                 {{ loan.balance < 0 && !loan.hidden && projections.get(loan.id)?.payoffMonth ? fmt(projections.get(loan.id)!.interestTotal) : '—' }}
               </td>
               <td class="row-actions">
-                <button class="reset" title="Edit start date, original amount, name" @click="openEditor(loan)">✎</button>
+                <button class="reset" title="Edit this debt's values" @click="openEditor(loan)">✎</button>
+                <button v-if="loan.balance < 0" class="reset" title="Model a refinance" @click="openRefi(loan)">⇄</button>
                 <button v-if="loan.source === 'manual' && !isMock" class="reset" title="Delete this debt" @click="removeRow(loan)">✕</button>
               </td>
             </tr>
@@ -1110,6 +1225,90 @@ function onExtra (loan: LoanRow, event: Event) {
       </aside>
     </div>
 
+    <!-- Refinance calculator flyout -->
+    <div v-if="refi" class="flyout-backdrop" @click.self="refi = null">
+      <aside class="flyout" role="dialog" aria-modal="true" aria-label="Refinance calculator">
+        <header class="flyout-head">
+          <h2>Refinance {{ refi.name }}?</h2>
+          <button class="reset" aria-label="Close" @click="refi = null">✕</button>
+        </header>
+        <p class="muted">
+          Compares this loan in isolation at fixed payments: today's
+          {{ fmt(refi.balance) }} at {{ refi.rate || 0 }}% APR and
+          {{ fmt(refi.payment) }}/mo versus a new loan paying it off.
+        </p>
+        <div class="edit-fields">
+          <div class="edit-grid">
+            <label>
+              New APR %
+              <input v-model="refi.newRate" inputmode="decimal" aria-label="New APR percent">
+            </label>
+            <label>
+              New monthly payment $
+              <input v-model="refi.newPayment" inputmode="decimal" aria-label="New monthly payment">
+            </label>
+            <label>
+              Origination fee $
+              <input v-model="refi.fee" inputmode="decimal" aria-label="Origination fee">
+            </label>
+            <label>
+              Cash out $ (optional)
+              <input v-model="refi.cashOut" inputmode="decimal" aria-label="Cash out amount">
+            </label>
+          </div>
+          <label class="edit-include">
+            <input v-model="refi.feeRolled" type="checkbox" aria-label="Roll the fee into the new loan">
+            Roll the fee into the new loan (it accrues interest too)
+          </label>
+        </div>
+
+        <div v-if="refiModel" class="refi-compare">
+          <div class="refi-col">
+            <h3>Keep it</h3>
+            <p class="refi-big">{{ refiModel.current.payoffMonth ? dateLabel(refiModel.current.payoffMonth) : 'never at this payment' }}</p>
+            <p class="muted">{{ fmt(refi.payment) }}/mo · {{ refiModel.currentCost !== null ? `${fmt(refiModel.currentCost)} interest left` : 'interest keeps growing' }}</p>
+          </div>
+          <div class="refi-col">
+            <h3>Refinance</h3>
+            <p class="refi-big">{{ refiModel.proposed.payoffMonth ? dateLabel(refiModel.proposed.payoffMonth) : 'never at this payment' }}</p>
+            <p class="muted">
+              {{ fmt(refiModel.principal) }} new principal
+              · {{ refiModel.proposedCost !== null ? `${fmt(refiModel.proposedCost)} interest + fee` : 'doesn’t amortize' }}
+            </p>
+          </div>
+        </div>
+
+        <p v-if="refiModel" class="payoff-strip" :class="{ warn: refiModel.savings !== null && refiModel.savings < 0 }">
+          <template v-if="refiModel.savings === null && !refiModel.current.payoffMonth && refiModel.proposed.payoffMonth">
+            The current payment never clears this loan — the refinance makes it
+            actually payable, done {{ dateLabel(refiModel.proposed.payoffMonth) }}.
+          </template>
+          <template v-else-if="refiModel.savings === null">
+            One side never amortizes — raise its payment to compare.
+          </template>
+          <template v-else-if="refiModel.savings >= 0">
+            Refinancing saves <strong>{{ fmt(refiModel.savings) }}</strong> all-in
+            <template v-if="refiModel.monthsSooner && refiModel.monthsSooner > 0">
+              and finishes {{ refiModel.monthsSooner }} months sooner</template>.
+          </template>
+          <template v-else>
+            Refinancing costs <strong>{{ fmt(-refiModel.savings) }}</strong> more all-in
+            <template v-if="refiModel.monthsSooner && refiModel.monthsSooner < 0">
+              and takes {{ -refiModel.monthsSooner }} months longer</template> — the fee
+            and terms don't beat what you have.
+          </template>
+          <template v-if="refiModel.cashOut > 0">
+            (Cash-out of {{ fmt(refiModel.cashOut) }} excluded from the savings math.)
+          </template>
+        </p>
+
+        <footer class="flyout-foot">
+          <span class="muted">A what-if only — nothing is saved.</span>
+          <button class="primary" @click="refi = null">Done</button>
+        </footer>
+      </aside>
+    </div>
+
     <!-- Row editor flyout -->
     <div v-if="editing" class="flyout-backdrop" @click.self="editing = null">
       <aside class="flyout" role="dialog" aria-modal="true" aria-label="Edit debt details">
@@ -1165,6 +1364,9 @@ function onExtra (loan: LoanRow, event: Event) {
             <input v-model="editing.included" type="checkbox" aria-label="Include on the chart">
             Include on the chart and in the math
           </label>
+          <p v-if="editorReconcile" class="recon-line" :class="editorReconcile.tone">
+            {{ editorReconcile.text }}
+          </p>
         </div>
         <footer class="flyout-foot">
           <button v-if="editing.hasOverride && !editing.isManual" class="ghost-btn" @click="clearEditorOverride">Reset overrides to synced</button>
@@ -1630,4 +1832,41 @@ tr.off td { color: #a9b0bf; }
 }
 
 .edit-include input { accent-color: #4a7dff; }
+
+.recon-line {
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.recon-line.ok { background: #eefaf0; color: #1b7f3b; }
+.recon-line.info { background: #eef2ff; color: #44507a; }
+.recon-line.error { background: #fdecec; color: #9b2c24; }
+
+.recon-error { color: #b3261e; cursor: help; margin-left: 0.2rem; }
+
+.refi-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.7rem;
+  margin-top: 0.4rem;
+}
+
+.refi-col {
+  padding: 0.7rem 0.85rem;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+}
+
+.refi-col h3 {
+  margin: 0 0 0.25rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #777;
+}
+
+.refi-big { margin: 0; font-size: 1.05rem; font-weight: 600; }
 </style>
