@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { unzipSync } from 'fflate'
-import type { Category, MonthDetail, MonthSummary } from '#shared/types/ynab'
+import type { BudgetTransaction, Category, MonthDetail, MonthSummary } from '#shared/types/ynab'
 
 // Parses YNAB's "Export plan data" zip: "<Name> as of <date> - Plan.csv"
 // (older exports say "- Budget.csv") plus an optional "- Register.csv".
@@ -31,6 +31,9 @@ export interface ParsedImport {
   months: Record<string, { income: number, categories: ImportedMonthCategory[] }>
   categoryCount: number
   accounts?: ImportedAccount[]
+  // The register, kept for recurring detection and the calendar's balance
+  // line. Absent on imports uploaded before this existed — re-upload to fill.
+  transactions?: BudgetTransaction[]
 }
 
 const MONTHS: Record<string, string> = {
@@ -150,6 +153,7 @@ export function parseYnabExportZip (bytes: Uint8Array): ParsedImport {
   }
 
   let accounts: ImportedAccount[] = []
+  let importedTransactions: BudgetTransaction[] | undefined
   if (registerEntry) {
     const registerRows = parseCsv(decoder.decode(files[registerEntry]!))
     const [registerHeader, ...transactions] = registerRows
@@ -162,6 +166,7 @@ export function parseYnabExportZip (bytes: Uint8Array): ParsedImport {
 
     if (combinedIdx >= 0 && dateIdx >= 0 && inflowIdx >= 0) {
       const txByAccount = new Map<string, Array<{ date: string, payee: string, amount: number }>>()
+      const register: BudgetTransaction[] = []
 
       for (const row of transactions) {
         const date = /(\d{2})\/(\d{2})\/(\d{4})/.exec(row[dateIdx] ?? '')
@@ -181,15 +186,28 @@ export function parseYnabExportZip (bytes: Uint8Array): ParsedImport {
             list = []
             txByAccount.set(account, list)
           }
+          const payee = row[payeeIdx]?.trim() ?? ''
+          const amount = inflow - parseMoney(row[outflowIdx] ?? '')
           list.push({
             date: `${date[3]}-${date[1]}-${date[2]}`,
-            payee: row[payeeIdx]?.trim() ?? '',
-            amount: inflow - parseMoney(row[outflowIdx] ?? '')
+            payee,
+            amount
+          })
+          register.push({
+            date: `${date[3]}-${date[1]}-${date[2]}`,
+            payee,
+            amount,
+            account,
+            category: row[combinedIdx]?.trim() || null,
+            transfer: payee.startsWith('Transfer :') || payee.startsWith('Transfer:')
           })
         }
       }
 
       accounts = buildAccountHistories(txByAccount)
+      // Keep the register bounded: newest 5,000 rows is years of most budgets.
+      register.sort((a, b) => a.date.localeCompare(b.date))
+      importedTransactions = register.slice(-5000)
     }
   }
 
@@ -197,7 +215,7 @@ export function parseYnabExportZip (bytes: Uint8Array): ParsedImport {
     throw createError({ statusCode: 400, statusMessage: 'No monthly data found in that export' })
   }
 
-  return { name: planName, months, categoryCount: categoryIds.size, accounts }
+  return { name: planName, months, categoryCount: categoryIds.size, accounts, transactions: importedTransactions }
 }
 
 export function nextMonthKey (key: string): string {

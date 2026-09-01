@@ -1,4 +1,5 @@
 <script setup lang="ts">
+useHead({ title: 'Debt Colectrr' })
 const { user: authUser, refresh: refreshAuth } = useAuth()
 
 // Fixed categorical order (validated against the app surface); color follows
@@ -78,6 +79,7 @@ const editing = ref<null | {
   endMonth: string
   rate: string
   payment: string
+  extraNext: string
   included: boolean
   isManual: boolean
   isPaid: boolean
@@ -485,12 +487,12 @@ const editorReconcile = computed(() => {
   const expected = original - paidIn
   const gap = balance - expected
   if (Math.abs(gap) <= 1) {
-    return { tone: 'ok', text: `✓ These line up: ${usd.format(original)} − ${usd.format(paidIn)} paid = ${usd.format(balance)}` }
+    return { tone: 'ok', text: `✓ These line up: ${usd.value.format(original)} − ${usd.value.format(paidIn)} paid = ${usd.value.format(balance)}` }
   }
   if (gap < 0) {
-    return { tone: 'error', text: `⚠ Doesn't add up: original − paid in = ${usd.format(expected)}, but the balance is ${usd.format(balance)} — ${usd.format(-gap)} more paid than the loan shrank. Check the numbers.` }
+    return { tone: 'error', text: `⚠ Doesn't add up: original − paid in = ${usd.value.format(expected)}, but the balance is ${usd.value.format(balance)} — ${usd.value.format(-gap)} more paid than the loan shrank. Check the numbers.` }
   }
-  return { tone: 'info', text: `Balance runs ${usd.format(gap)} above original − paid in — that's usually accrued interest and fees.` }
+  return { tone: 'info', text: `Balance runs ${usd.value.format(gap)} above original − paid in — that's usually accrued interest and fees.` }
 })
 
 // ---- Refinance calculator -------------------------------------------------
@@ -619,6 +621,7 @@ function openEditor (loan: LoanRow) {
     endMonth: raw.endDate ? raw.endDate.slice(0, 7) : '',
     rate: raw.rate != null ? String(raw.rate) : '',
     payment: raw.minimumPayment != null ? (raw.minimumPayment / 1000).toFixed(2) : '',
+    extraNext: extras.value[raw.id] ? (extras.value[raw.id]! / 1000).toFixed(2) : '',
     included: !raw.hidden,
     isManual: raw.source === 'manual',
     isPaid: (raw.userBalance ?? raw.balance) >= 0,
@@ -643,6 +646,11 @@ async function saveEditor () {
   const raw = debts.value.find(item => item.id === edit.id)
   if (!raw) { editing.value = null; return }
   const money = (value: string) => Number.parseFloat(value.replace(/[$,]/g, ''))
+
+  // One-time "extra next month" what-if — browser-local, applied per loan.
+  const extraNext = money(edit.extraNext)
+  if (Number.isFinite(extraNext) && extraNext > 0) extras.value[edit.id] = Math.round(extraNext * 1000)
+  else delete extras.value[edit.id]
   const rate = Number.parseFloat(edit.rate)
   const payment = money(edit.payment)
   const paidInInput = money(edit.paidIn)
@@ -897,8 +905,11 @@ const stuckLoans = computed(() =>
   activeLoans.value.filter(loan => !projections.value.get(loan.id)?.payoffMonth)
 )
 
-const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
-const fmt = (milliunits: number) => usd.format(milliunits / 1000)
+// Debts are largely hand-tracked, so they follow the Account currency
+// preference rather than any one budget's currency.
+const { format: formatMoney, userCurrency } = useMoney()
+const usd = computed(() => new Intl.NumberFormat('en-US', { style: 'currency', currency: userCurrency.value }))
+const fmt = (milliunits: number) => formatMoney(milliunits)
 const fmtShort = (milliunits: number) => {
   const dollars = milliunits / 1000
   return dollars >= 1000 ? `$${Math.round(dollars / 1000)}k` : `$${Math.round(dollars)}`
@@ -928,41 +939,20 @@ const syncedLabel = computed(() => {
 
 const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].label)
 
-// ---- Row edit handlers ----------------------------------------------------
-
-function onRate (loan: LoanRow, event: Event) {
-  const value = Number.parseFloat((event.target as HTMLInputElement).value)
-  patchRow(loan, { rate: Number.isFinite(value) && value > 0 ? value : null })
-}
-
-function onPayment (loan: LoanRow, event: Event) {
-  const value = Number.parseFloat((event.target as HTMLInputElement).value.replace(/[$,]/g, ''))
-  patchRow(loan, { minimumPayment: Number.isFinite(value) && value > 0 ? Math.round(value * 1000) : null })
-}
-
-function onExtra (loan: LoanRow, event: Event) {
-  const value = Number.parseFloat((event.target as HTMLInputElement).value.replace(/[$,]/g, ''))
-  if (Number.isFinite(value) && value > 0) extras.value[loan.id] = Math.round(value * 1000)
-  else delete extras.value[loan.id]
-}
 </script>
 
 <template>
   <main class="page">
     <header class="top">
-      <div>
-        <h1><NuxtLink to="/">YNABRR</NuxtLink> <span class="crumb">/ Debt</span></h1>
-        <p class="tagline">
-          Every loan's real history — synced from YNAB or added by hand — then
-          the road ahead. Pick a payoff strategy and bend the curve.
-        </p>
+      <div class="title-row">
+        <h1>Debt Colectrr</h1>
+        <NuxtLink to="/remembrr" class="story-link">Remembrr — the story so far →</NuxtLink>
+        <span v-if="isMock" class="badge" title="Serving built-in sample data — no YNAB account is being read">Mock data</span>
       </div>
-      <nav class="nav">
-        <NuxtLink to="/sandbox">Sandbox</NuxtLink>
-        <span v-if="isMock" class="badge">Mock data</span>
-        <NuxtLink v-if="authUser" to="/account">{{ authUser.email }}</NuxtLink>
-        <NuxtLink v-else-if="!isMock" to="/login">Sign in</NuxtLink>
-      </nav>
+      <p class="tagline">
+        Every loan's real history — synced from YNAB or added by hand — then
+        the road ahead. Pick a payoff strategy and bend the curve.
+      </p>
     </header>
 
     <section v-if="!isMock && !loading" class="sync-bar">
@@ -1023,7 +1013,7 @@ function onExtra (loan: LoanRow, event: Event) {
           <p>{{ fmt(totalPayment) }}</p>
           <p class="sub">
             <template v-if="pooled">{{ fmt(totalMinimums) }} minimums + {{ fmt(snowballPool) }} snowball</template>
-            <template v-else>minimums only, editable below</template>
+            <template v-else>minimums only, editable in the panel</template>
           </p>
         </article>
         <article :class="{ negative: activeLoans.length && !debtFreeMonth }">
@@ -1157,39 +1147,38 @@ function onExtra (loan: LoanRow, event: Event) {
         </p>
       </section>
 
-      <section class="table-wrap">
+      <section class="table-card">
         <table>
           <thead>
             <tr>
-              <th />
+              <th class="check" />
               <th class="name">Debt</th>
               <th>Started</th>
-              <th class="num">Original</th>
+              <th class="num col-wide">Original</th>
               <th class="num">Paid in</th>
               <th class="num">Balance</th>
-              <th class="num edit">APR %</th>
-              <th class="num edit">Monthly</th>
-              <th class="num edit">Extra next mo</th>
+              <th class="num teal-h">APR %</th>
+              <th class="num teal-h">Monthly</th>
               <th>Payoff</th>
-              <th class="num">Interest left</th>
-              <th />
+              <th class="num col-wide">Interest left</th>
+              <th class="actions" />
             </tr>
           </thead>
           <tbody>
             <tr v-for="loan in loans" :key="loan.id" :class="{ off: loan.hidden }">
-              <td>
+              <td class="check">
                 <input type="checkbox" :checked="!loan.hidden" :aria-label="`Include ${loan.name}`" @change="patchRow(loan, { hidden: !loan.hidden })">
               </td>
               <td class="name">
                 <span class="chip" :style="{ background: loan.color }" />
-                {{ loan.name }}
+                <span class="loan-name">{{ loan.name }}</span>
                 <span class="plan-name">{{ loan.source === 'manual' ? 'manual' : loan.planName }}</span>
               </td>
-              <td>
+              <td class="quiet">
                 {{ loan.startDate ? dateLabel(loan.startDate) : '—' }}
-                <span v-if="loan.hasOverride" class="override-mark" title="Start adjusted by you — sync keeps it">*</span>
+                <span v-if="loan.hasOverride" class="override-mark" title="Adjusted by you — sync keeps it">*</span>
               </td>
-              <td class="num">{{ fmt(-loan.startBalance) }}</td>
+              <td class="num col-wide">{{ fmt(-loan.startBalance) }}</td>
               <td class="num">
                 {{ fmt(loan.paidIn) }}
                 <span
@@ -1199,28 +1188,27 @@ function onExtra (loan: LoanRow, event: Event) {
                 >⚠</span>
               </td>
               <td class="num strong">{{ loan.balance < 0 ? fmt(-loan.balance) : 'Paid ✓' }}</td>
-              <td class="num edit">
-                <input type="text" inputmode="decimal" :value="loan.rate ?? ''" placeholder="0" :aria-label="`APR for ${loan.name}`" :disabled="loan.hidden || loan.balance >= 0" @change="onRate(loan, $event)">
+              <td class="num quiet">{{ loan.balance < 0 && loan.rate ? `${loan.rate}%` : '—' }}</td>
+              <td class="num quiet">
+                <template v-if="loan.balance < 0">
+                  {{ fmt(paymentFor(loan)) }}
+                  <span v-if="extras[loan.id]" class="extra-tag" :title="`One-time extra next month — set in the edit panel`">+{{ fmt(extras[loan.id]!) }}</span>
+                </template>
+                <template v-else>—</template>
               </td>
-              <td class="num edit">
-                <input type="text" inputmode="decimal" :value="loan.balance < 0 ? (paymentFor(loan) / 1000).toFixed(2) : ''" :aria-label="`Monthly payment for ${loan.name}`" :disabled="loan.hidden || loan.balance >= 0" @change="onPayment(loan, $event)">
-              </td>
-              <td class="num edit">
-                <input type="text" inputmode="decimal" :value="extras[loan.id] ? (extras[loan.id]! / 1000).toFixed(2) : ''" placeholder="0" :aria-label="`One-time extra payment for ${loan.name}`" :disabled="loan.hidden || loan.balance >= 0" @change="onExtra(loan, $event)">
-              </td>
-              <td>
+              <td class="payoff">
                 <template v-if="loan.balance >= 0">{{ loan.endDate ? dateLabel(loan.endDate) : 'Paid' }} 🏆</template>
                 <template v-else-if="loan.hidden">—</template>
                 <template v-else-if="projections.get(loan.id)?.payoffMonth">{{ dateLabel(projections.get(loan.id)!.payoffMonth!) }}</template>
                 <template v-else>never at this rate</template>
               </td>
-              <td class="num">
+              <td class="num col-wide quiet">
                 {{ loan.balance < 0 && !loan.hidden && projections.get(loan.id)?.payoffMonth ? fmt(projections.get(loan.id)!.interestTotal) : '—' }}
               </td>
-              <td class="row-actions">
-                <button class="reset" title="Edit this debt's values" @click="openEditor(loan)">✎</button>
-                <button v-if="loan.balance < 0" class="reset" title="Model a refinance" @click="openRefi(loan)">⇄</button>
-                <button v-if="loan.source === 'manual' && !isMock" class="reset" title="Delete this debt" @click="removeRow(loan)">✕</button>
+              <td class="actions">
+                <button class="icon-btn" title="Edit this debt's values" @click="openEditor(loan)">✎</button>
+                <button v-if="loan.balance < 0" class="icon-btn refi-btn" title="Model a refinance" @click="openRefi(loan)">⇄</button>
+                <button v-if="loan.source === 'manual' && !isMock" class="icon-btn del-btn" title="Delete this manual debt" @click="removeRow(loan)">✕</button>
               </td>
             </tr>
           </tbody>
@@ -1248,11 +1236,13 @@ function onExtra (loan: LoanRow, event: Event) {
     </section>
 
     <p v-if="!loading && loans.length" class="footnote">
-      Synced rows refresh from YNAB when you hit Sync (your APR, Monthly, and
-      start-date fixes survive). Manual rows chart a straight paydown between
-      their two known points. "Extra next mo" is a what-if that stays in this
-      browser.
+      Synced rows refresh from YNAB when you hit Sync — your APR, Monthly, and
+      start-date fixes survive. Manual rows chart a straight paydown between
+      their two known points. "Extra next month" lives in each row's ✎ panel
+      and is a one-time what-if that stays in this browser.
     </p>
+
+    <PageFooter />
 
     <!-- Payoff order flyout -->
     <div v-if="orderModalOpen" class="flyout-backdrop" @click.self="orderModalOpen = false">
@@ -1458,6 +1448,14 @@ function onExtra (loan: LoanRow, event: Event) {
               Monthly payment $
               <input v-model="editing.payment" inputmode="decimal" aria-label="Monthly payment" :disabled="editing.isPaid">
             </label>
+            <label v-if="!editing.isPaid">
+              Extra next month $
+              <input
+                v-model="editing.extraNext" inputmode="decimal" placeholder="0"
+                aria-label="One-time extra payment next month"
+                title="One-time what-if on top of the monthly — stays in this browser"
+              >
+            </label>
           </div>
           <label class="edit-include">
             <input v-model="editing.included" type="checkbox" aria-label="Include on the chart">
@@ -1478,409 +1476,455 @@ function onExtra (loan: LoanRow, event: Event) {
 
 <style scoped>
 .page {
-  max-width: 60rem;
-  margin: 0 auto;
-  padding: 2.5rem 1.5rem 5rem;
-  font-family: system-ui, sans-serif;
+  flex: 1;
+  min-width: 0;
+  padding: 26px 32px 60px;
+  max-width: 1060px;
   line-height: 1.45;
 }
 
-.top {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1rem;
-  align-items: baseline;
-  justify-content: space-between;
-}
-
-.top h1 { margin: 0; }
-.top h1 a { color: inherit; text-decoration: none; }
-.crumb { color: #999; font-weight: 400; }
-.tagline { margin: 0.25rem 0 0; color: #666; max-width: 36rem; }
-
-.nav { display: flex; gap: 0.9rem; align-items: center; }
-.nav a { color: #4a7dff; text-decoration: none; font-size: 0.9rem; }
-.nav a:hover { text-decoration: underline; }
+/* ---- Header ---- */
+.top { display: block; }
+.title-row { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.title-row h1 { font-size: 26px; }
+.story-link { font-weight: 800; font-size: 13.5px; }
 
 .badge {
-  padding: 0.2rem 0.55rem;
-  border-radius: 999px;
-  background: #fff3cd;
-  border: 1px solid #ffe08a;
-  color: #7a5d00;
-  font-size: 0.8rem;
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  background: var(--note-bg);
+  border: 1.5px solid var(--note-border);
+  color: var(--warn);
+  font-size: 11.5px;
+  font-weight: 800;
 }
 
+.tagline {
+  margin: 8px 0 0;
+  font-size: 13.5px;
+  color: var(--fg-muted);
+  max-width: 640px;
+}
+
+/* ---- Sync row ---- */
 .sync-bar {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 8px;
   align-items: center;
-  margin-top: 1.1rem;
+  margin-top: 14px;
 }
 
 .picker-label {
-  font-size: 0.8rem;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 800;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #777;
+  letter-spacing: 0.7px;
+  color: var(--fg-subtle);
 }
 
 .pill {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.28rem 0.75rem;
-  border: 1px solid #ccc;
-  border-radius: 999px;
-  background: #fff;
-  font-size: 0.85rem;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1.5px solid var(--border-input);
+  border-radius: var(--r-pill);
+  background: var(--bg-card);
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--fg-muted);
   cursor: pointer;
   user-select: none;
 }
-
 .pill input { position: absolute; opacity: 0; pointer-events: none; }
-.pill.on { border-color: #4a7dff; background: #eef4ff; color: #2b52c7; }
+.pill.on { border-color: var(--teal); background: var(--teal); color: #fff; }
 
 .primary {
-  padding: 0.35rem 0.9rem;
-  border: 1px solid #4a7dff;
-  border-radius: 6px;
-  background: #4a7dff;
+  padding: 7px 16px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: var(--teal);
   color: #fff;
   font: inherit;
-  font-size: 0.875rem;
+  font-size: 13px;
+  font-weight: 800;
   cursor: pointer;
 }
-
+.primary:hover:not(:disabled) { background: var(--teal-dark); }
 .primary:disabled { opacity: 0.55; cursor: not-allowed; }
 
 .ghost-btn {
-  padding: 0.35rem 0.9rem;
-  border: 1px solid #ccc;
-  border-radius: 6px;
-  background: #fff;
+  padding: 7px 14px;
+  border: 1.5px solid var(--border-input);
+  border-radius: var(--r-sm);
+  background: var(--bg-card);
   font: inherit;
-  font-size: 0.875rem;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--fg-muted);
   cursor: pointer;
 }
+.ghost-btn:hover { border-color: var(--teal); color: var(--teal-dark); }
 
-.sync-msg { font-size: 0.85rem; color: #1b7f3b; }
-.muted { color: #999; font-size: 0.85rem; }
+.sync-msg { font-size: 12px; color: var(--ok); font-weight: 700; }
+.muted { color: var(--fg-subtle); font-size: 12px; }
 
+/* ---- Empty / loading ---- */
+.status {
+  margin: 24px 0;
+  padding: 16px 20px;
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: var(--r-card);
+  font-size: 13.5px;
+}
+.status h2 { font-size: 16px; margin: 0 0 6px; }
+.status p { margin: 6px 0 0; color: var(--fg-muted); }
+
+/* ---- Stat cards ---- */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin: 16px 0;
+}
+
+.stats article {
+  padding: 14px 16px;
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+}
+
+.stats h3 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--fg-subtle);
+}
+
+.stats p { margin: 4px 0 0; font-size: 21px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.stats .sub { font-size: 11.5px; font-weight: 400; color: var(--fg-faint); margin-top: 0; }
+
+/* Paid down reads green; the Debt-free card is the teal celebration */
+.stats article:nth-child(2) p:not(.sub) { color: var(--ok); }
+.stats article:nth-child(4) {
+  background: var(--teal-badge);
+  border-color: #a8dcd6;
+}
+.stats article:nth-child(4) h3 { color: var(--teal-dark); }
+.stats article:nth-child(4) p { color: var(--teal-dark); }
+.stats article:nth-child(4) .sub { color: var(--teal); }
+.stats .negative p:not(.sub) { color: var(--danger); }
+
+/* ---- Strategy cards ---- */
 .strategies {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
-  gap: 0.75rem;
-  margin: 0 0 0.75rem;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin: 16px 0 0;
 }
 
 .strategy-card {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.75rem 0.9rem;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  background: #fff;
+  gap: 4px;
+  padding: 11px 13px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-card);
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
+.strategy-card.on { border: 2px solid var(--teal); background: var(--teal-bg); padding: 10.5px 12.5px; }
 
-.strategy-card.on {
-  border-color: #4a7dff;
-  background: #f7faff;
-  box-shadow: inset 0 0 0 1px #4a7dff;
-}
+.strat-name { font-weight: 800; font-size: 13.5px; }
+.strat-blurb { font-size: 11.5px; color: var(--fg-subtle); line-height: 1.4; }
+.strat-result { font-size: 12px; font-weight: 700; color: #4a463c; font-variant-numeric: tabular-nums; }
+.strategy-card.on .strat-result { color: var(--teal-dark); }
 
-.strat-name { font-weight: 600; font-size: 0.925rem; }
-.strat-blurb { font-size: 0.78rem; color: #777; line-height: 1.35; }
-.strat-result { font-size: 0.8rem; color: #444; font-variant-numeric: tabular-nums; }
-.strategy-card.on .strat-result { color: #2b52c7; }
-
+/* ---- Snowball / extra row ---- */
 .strategy-bar {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.6rem;
+  gap: 14px;
   align-items: center;
-  margin: 0 0 1rem;
+  margin: 10px 0 0;
 }
 
 .pool-field {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  font-size: 0.85rem;
-  color: #555;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--fg-muted);
 }
 
 .pool-field input {
-  width: 5.5rem;
-  padding: 0.3rem 0.45rem;
-  border: 1px solid #b9c9f5;
-  border-radius: 6px;
+  width: 80px;
+  padding: 6px 9px;
+  border: 1.5px solid var(--border-input);
+  border-radius: var(--r-xs);
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 13px;
+  font-weight: 700;
   text-align: right;
+  background: var(--bg-input);
   font-variant-numeric: tabular-nums;
 }
+.pool-field input:focus { border-color: var(--teal); outline: none; }
 
-.status {
-  margin: 2rem 0;
-  padding: 1rem 1.25rem;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-}
-
-.stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
-  gap: 1rem;
-  margin: 1.5rem 0;
-}
-
-.stats article { padding: 0.9rem 1.1rem; border: 1px solid #ddd; border-radius: 8px; }
-
-.stats h3 {
-  margin: 0;
-  font-size: 0.8rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #777;
-}
-
-.stats p { margin: 0.25rem 0 0; font-size: 1.35rem; font-variant-numeric: tabular-nums; }
-.stats .sub { font-size: 0.8rem; color: #999; }
-.stats .negative p { color: #b3261e; }
-
+/* ---- Chart card ---- */
 .chart-card {
   position: relative;
-  padding: 1rem 1.1rem 0.9rem;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  margin-bottom: 1.5rem;
+  margin-top: 14px;
+  padding: 18px 20px;
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: var(--r-card);
 }
 
 .burndown { width: 100%; height: auto; display: block; }
 
-.grid { stroke: #eee; stroke-width: 1; }
-.tick { fill: #999; font-size: 11px; font-variant-numeric: tabular-nums; }
+.grid { stroke: var(--border-soft); stroke-width: 1; }
+.tick { fill: var(--fg-subtle); font-size: 11px; font-variant-numeric: tabular-nums; }
 
 .band.past { opacity: 0.85; stroke: #fff; stroke-width: 2; }
 .band.future { opacity: 0.28; stroke: #fff; stroke-width: 2; }
 
-.track { fill: none; stroke: #4a7dff; stroke-width: 2; stroke-dasharray: 6 5; }
-.today-line { stroke: #c9d4f2; stroke-width: 1; stroke-dasharray: 2 3; }
-.today-dot { fill: #fff; stroke: #4a7dff; stroke-width: 2.5; }
-.crosshair { stroke: #b6b6b6; stroke-width: 1; }
+.track { fill: none; stroke: var(--teal); stroke-width: 2; stroke-dasharray: 6 5; }
+.today-line { stroke: var(--teal-border); stroke-width: 1; stroke-dasharray: 2 3; }
+.today-dot { fill: #fff; stroke: var(--teal); stroke-width: 2.5; }
+.crosshair { stroke: var(--fg-subtle); stroke-width: 1; }
 
 .tooltip {
   position: absolute;
-  top: 1.2rem;
-  padding: 0.5rem 0.7rem;
-  background: #fff;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  box-shadow: 0 4px 14px rgb(0 0 0 / 10%);
-  font-size: 0.8rem;
+  top: 20px;
+  padding: 9px 12px;
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(43, 42, 38, 0.14);
+  font-size: 11.5px;
   pointer-events: none;
-  min-width: 13rem;
+  min-width: 210px;
   z-index: 5;
 }
 
-.tip-title { margin: 0 0 0.3rem; font-weight: 600; }
-.tip-phase { color: #999; font-weight: 400; font-style: italic; margin-left: 0.3rem; }
-.tip-row { margin: 0.1rem 0; display: flex; align-items: center; gap: 0.4rem; }
-.tip-name { flex: 1; color: #444; }
-.tip-value { font-variant-numeric: tabular-nums; }
-.tip-total { border-top: 1px solid #eee; margin-top: 0.3rem; padding-top: 0.3rem; font-weight: 600; }
+.tip-title { margin: 0 0 4px; font-weight: 800; font-size: 12px; }
+.tip-phase { color: var(--fg-faint); font-weight: 600; margin-left: 4px; }
+.tip-row { margin: 3px 0 0; display: flex; align-items: center; gap: 7px; }
+.tip-name { flex: 1; color: var(--fg-muted); }
+.tip-value { font-weight: 800; font-variant-numeric: tabular-nums; }
+.tip-total { border-top: 1px solid var(--border-soft); margin-top: 5px; padding-top: 4px; }
 
 .chip { display: inline-block; width: 10px; height: 10px; border-radius: 3px; flex: none; }
 
 .legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem 1.1rem;
-  margin: 0.6rem 0 0.2rem;
-  font-size: 0.82rem;
-  color: #444;
+  gap: 6px 14px;
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fg-muted);
 }
-
-.legend-item { display: inline-flex; align-items: center; gap: 0.4rem; }
-.legend-item.muted { color: #999; }
-.chip.solid { background: #b9c4dd; }
-.chip.dashed { background: transparent; border: 2px dashed #4a7dff; width: 12px; height: 6px; border-radius: 2px; }
+.legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.legend-item.muted { color: var(--fg-faint); }
+.chip.solid { width: 14px; height: 9px; border-radius: 2px; background: #8b8577; opacity: 0.8; }
+.chip.dashed { width: 14px; height: 9px; border-radius: 2px; background: #8b8577; opacity: 0.3; border: none; }
 
 .payoff-strip {
-  margin: 0.8rem 0 0.2rem;
-  padding: 0.6rem 0.9rem;
-  background: #eef2ff;
-  border-radius: 6px;
-  font-size: 0.9rem;
+  margin: 10px 0 0;
+  padding: 10px 14px;
+  background: var(--teal-bg);
+  border: 1px solid var(--teal-border);
+  border-radius: 9px;
+  font-size: 13px;
+  color: #3c4a46;
+}
+.payoff-strip.warn { background: var(--note-bg); border-color: var(--note-border); color: var(--warn); }
+
+/* ---- Accounts table — text only, no horizontal scroll ---- */
+.table-card {
+  margin-top: 16px;
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: var(--r-card);
+  overflow: hidden;
 }
 
-.payoff-strip.warn { background: #fff8e1; }
-
-.table-wrap { overflow-x: auto; }
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.875rem;
-  min-width: 60rem;
-}
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; table-layout: auto; }
 
 thead th {
   text-align: left;
-  font-size: 0.72rem;
+  font-size: 10.5px;
+  font-weight: 800;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #888;
-  border-bottom: 2px solid #ddd;
-  padding: 0.45rem 0.55rem;
+  letter-spacing: 0.5px;
+  color: var(--fg-subtle);
+  border-bottom: 1.5px solid var(--border-soft);
+  padding: 10px 8px;
+  white-space: nowrap;
 }
+thead th:first-child { padding-left: 16px; }
+thead th:last-child { padding-right: 16px; }
+thead th.teal-h { color: var(--teal-dark); }
 
-td { padding: 0.45rem 0.55rem; border-bottom: 1px solid #eee; }
+td { padding: 9px 8px; border-bottom: 1px solid var(--border-hair); vertical-align: middle; }
+td:first-child { padding-left: 16px; }
+td:last-child { padding-right: 16px; }
+tbody tr:last-child td { border-bottom: none; }
 
 th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-td.strong { font-weight: 600; }
-td.name { white-space: nowrap; }
-td.name .chip { margin-right: 0.4rem; }
+td.strong { font-weight: 800; font-size: 13px; }
+td.quiet { color: var(--fg-muted); font-size: 12px; white-space: nowrap; }
 
-.plan-name { margin-left: 0.45rem; font-size: 0.72rem; color: #999; }
-.override-mark { color: #4a7dff; font-weight: 700; }
+td.check input { width: 15px; height: 15px; accent-color: var(--teal); display: block; }
 
-th.edit, td.edit { background: #f7faff; }
-td.edit input {
-  width: 6rem;
-  padding: 0.25rem 0.4rem;
-  border: 1px solid #b9c9f5;
-  border-radius: 6px;
-  font: inherit;
-  font-size: 0.85rem;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
+td.name { max-width: 0; width: 32%; }
+td.name .chip { margin-right: 8px; vertical-align: -1px; }
+.loan-name { font-weight: 700; font-size: 13.5px; }
+td.name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plan-name { margin-left: 7px; font-size: 10.5px; color: var(--fg-faint); }
+
+.override-mark { color: var(--teal); font-weight: 800; }
+.recon-error { color: var(--danger); cursor: help; margin-left: 2px; }
+.extra-tag {
+  margin-left: 5px;
+  font-size: 10.5px;
+  font-weight: 800;
+  color: var(--teal-dark);
+  background: var(--teal-badge);
+  border-radius: var(--r-pill);
+  padding: 1px 7px;
 }
 
-td.edit input:disabled { background: #f3f5f9; border-color: #dde3f0; color: #a9b0bf; }
+td.payoff { font-size: 12px; font-weight: 700; color: #4a463c; white-space: nowrap; }
 
-tr.off td { color: #a9b0bf; }
+tr.off td { opacity: 0.5; }
+tr.off .loan-name { text-decoration: line-through; }
 
-.row-actions { white-space: nowrap; }
-.reset { border: none; background: none; cursor: pointer; color: #4a7dff; font-size: 1rem; }
+td.actions { white-space: nowrap; text-align: right; }
+.icon-btn {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--teal);
+  font-size: 13px;
+  padding: 2px 3px;
+}
+.icon-btn:hover { color: var(--teal-dark); }
+.refi-btn { color: var(--fg-subtle); }
+.refi-btn:hover { color: var(--teal-dark); }
+.del-btn { color: var(--fg-faint); }
+.del-btn:hover { color: var(--danger); }
 
+/* ---- Add a debt by hand ---- */
 .manage {
-  margin-top: 1.6rem;
-  padding: 1rem 1.25rem;
-  border: 1px solid #ddd;
-  border-radius: 8px;
+  margin-top: 16px;
+  padding: 18px 20px;
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: var(--r-card);
 }
-
-.manage h2 { margin: 0 0 0.3rem; font-size: 1.05rem; }
+.manage h2 { margin: 0; font-size: 15px; font-weight: 800; }
+.manage .muted { display: block; margin-top: 6px; font-size: 12.5px; }
 
 .add-form {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-top: 0.7rem;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
 }
 
 .add-form input {
-  padding: 0.4rem 0.55rem;
-  border: 1px solid #ccc;
-  border-radius: 6px;
+  padding: 8px 11px;
+  border: 1.5px solid var(--border-input);
+  border-radius: var(--r-sm);
   font: inherit;
-  font-size: 0.875rem;
+  font-size: 13px;
+  background: var(--bg-input);
 }
+.add-form input:focus { border-color: var(--teal); outline: none; }
+.add-form input:first-child { flex: 2 1 170px; }
 
-.add-form input:first-child { flex: 1 1 14rem; }
+.footnote { color: var(--fg-faint); font-size: 11.5px; line-height: 1.5; margin-top: 14px; }
 
-.footnote { color: #999; font-size: 0.8rem; margin-top: 1rem; }
-
-/* ---- Flyouts ---- */
-
+/* ---- Side panels (edit / refinance / payoff order) ---- */
 .flyout-backdrop {
   position: fixed;
   inset: 0;
-  background: rgb(15 18 24 / 32%);
+  background: rgba(43, 42, 38, 0.45);
   z-index: 40;
   display: flex;
   justify-content: flex-end;
 }
 
 .flyout {
-  width: min(30rem, 100%);
-  height: 100%;
-  background: #fff;
-  box-shadow: -12px 0 32px rgb(0 0 0 / 18%);
-  padding: 1.25rem 1.4rem;
+  width: min(480px, 100%);
+  height: 100vh;
+  background: var(--bg-card);
+  border-left: 1.5px solid var(--border);
+  box-shadow: -12px 0 32px rgba(43, 42, 38, 0.18);
+  padding: 22px 24px;
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 10px;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
-.flyout-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
+.flyout-head { display: flex; align-items: baseline; justify-content: space-between; }
+.flyout-head h2 { margin: 0; font-size: 17px; font-weight: 800; }
+.flyout .muted { font-size: 12.5px; line-height: 1.5; }
 
-.flyout-head h2 { margin: 0; font-size: 1.1rem; }
+.reset { border: none; background: none; cursor: pointer; color: var(--fg-subtle); font-size: 16px; font-weight: 800; padding: 0; }
+.reset:hover { color: var(--fg); }
 
+/* order rows — warm cards with position numbers */
 .order-list {
   list-style: none;
-  margin: 0.4rem 0 0;
+  margin: 6px 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 8px;
 }
 
 .order-list li {
   display: flex;
   align-items: center;
-  gap: 0.55rem;
-  padding: 0.55rem 0.7rem;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  background: #fff;
+  gap: 10px;
+  padding: 9px 12px;
+  background: var(--bg-app);
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
 }
-
 .order-list li.dragging { opacity: 0.5; border-style: dashed; }
 
-.order-pos {
-  width: 1.3rem;
-  height: 1.3rem;
-  border-radius: 50%;
-  background: #eef4ff;
-  color: #2b52c7;
-  font-size: 0.75rem;
-  font-weight: 600;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-}
+.order-pos { width: 18px; font-weight: 800; font-size: 12px; color: var(--fg-subtle); flex: none; }
+.drag-grip { color: #c9c2b2; cursor: grab; user-select: none; }
+.order-name { flex: 1; min-width: 0; font-weight: 700; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.order-balance { font-size: 12.5px; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.order-payoff { font-size: 12px; font-weight: 700; color: var(--teal-dark); min-width: 66px; text-align: right; font-variant-numeric: tabular-nums; }
 
-.drag-grip { color: #c2c7d2; cursor: grab; }
-.order-name { flex: 1; font-size: 0.9rem; }
-.order-balance { font-variant-numeric: tabular-nums; font-size: 0.85rem; color: #555; }
-.order-payoff { font-size: 0.8rem; color: #2b52c7; min-width: 4.6rem; text-align: right; font-variant-numeric: tabular-nums; }
-
-.order-btns { display: inline-flex; gap: 0.2rem; }
+.order-btns { display: inline-flex; gap: 4px; }
 .order-btns button {
-  border: 1px solid #ccc;
-  background: #fff;
-  border-radius: 5px;
-  width: 1.6rem;
-  height: 1.6rem;
+  border: 1px solid var(--border-input);
+  background: var(--bg-card);
+  border-radius: 6px;
+  width: 24px;
+  height: 24px;
   cursor: pointer;
   font: inherit;
-  font-size: 0.8rem;
+  font-size: 12px;
 }
 .order-btns button:disabled { opacity: 0.35; cursor: not-allowed; }
 
@@ -1889,119 +1933,131 @@ tr.off td { color: #a9b0bf; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.6rem;
-  padding-top: 0.8rem;
-  border-top: 1px solid #eee;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1.5px solid var(--border-soft);
 }
 
-.edit-fields {
-  display: flex;
-  flex-direction: column;
-  gap: 0.7rem;
-  margin-top: 0.4rem;
-}
+/* field groups — design's uppercase micro-labels */
+.edit-fields { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; }
 
 .edit-fields label {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  font-size: 0.85rem;
-  color: #555;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--fg-subtle);
 }
 
 .edit-fields input {
-  padding: 0.45rem 0.6rem;
-  border: 1px solid #ccc;
-  border-radius: 6px;
+  padding: 7px 10px;
+  border: 1.5px solid var(--border-input);
+  border-radius: var(--r-xs);
   font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  background: var(--bg-input);
+  text-transform: none;
+  letter-spacing: normal;
 }
+.edit-fields input:focus { border-color: var(--teal); outline: none; }
+.edit-fields input:disabled { background: var(--bg-app); border-color: var(--border-soft); color: var(--fg-subtle); }
 
-.edit-fields input:disabled { background: #f3f5f9; color: #a9b0bf; }
-
-.edit-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.7rem;
-}
+.edit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
 .edit-include {
   flex-direction: row !important;
   align-items: center;
-  gap: 0.45rem !important;
+  gap: 8px !important;
+  font-size: 12.5px !important;
+  font-weight: 700 !important;
+  text-transform: none !important;
+  letter-spacing: normal !important;
+  color: var(--fg-muted) !important;
+  cursor: pointer;
 }
+.edit-include input { width: 15px; height: 15px; accent-color: var(--teal); }
 
-.edit-include input { accent-color: #4a7dff; }
+.recon-line { margin: 0; padding: 9px 12px; border-radius: var(--r-xs); font-size: 12.5px; line-height: 1.5; }
+.recon-line.ok { background: var(--ok-bg); color: var(--ok); }
+.recon-line.info { background: var(--teal-bg); color: #3c4a46; }
+.recon-line.error { background: var(--danger-bg); color: var(--danger-dark); }
 
-.recon-line {
-  margin: 0;
-  padding: 0.5rem 0.7rem;
-  border-radius: 6px;
-  font-size: 0.82rem;
-  line-height: 1.4;
-}
+/* refinance compare — plan card vs teal "with the new loan" card */
+.refi-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 6px; }
 
-.recon-line.ok { background: #eefaf0; color: #1b7f3b; }
-.recon-line.info { background: #eef2ff; color: #44507a; }
-.recon-line.error { background: #fdecec; color: #9b2c24; }
-
-.recon-error { color: #b3261e; cursor: help; margin-left: 0.2rem; }
-
-.refi-compare {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.7rem;
-  margin-top: 0.4rem;
-}
-
-.refi-col {
-  padding: 0.7rem 0.85rem;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-}
+.refi-col { padding: 12px 14px; border-radius: 10px; background: var(--bg-app); border: 1.5px solid var(--border-soft); }
+.refi-col:last-child { background: var(--teal-badge); border-color: #a8dcd6; }
 
 .refi-col h3 {
-  margin: 0 0 0.25rem;
-  font-size: 0.75rem;
+  margin: 0;
+  font-size: 10.5px;
+  font-weight: 800;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #777;
+  letter-spacing: 0.5px;
+  color: var(--fg-subtle);
 }
+.refi-col:last-child h3 { color: var(--teal-dark); }
 
-.refi-big { margin: 0; font-size: 1.05rem; font-weight: 600; }
+.refi-big { margin: 4px 0 0; font-size: 17px; font-weight: 800; }
+.refi-col:last-child .refi-big { color: var(--teal-dark); }
+.refi-col .muted { font-size: 12px; margin-top: 2px; }
+.refi-col:last-child .muted { color: var(--teal); }
 
+/* bundle checklist — warm rows */
 .bundle-list {
   list-style: none;
-  margin: 0.2rem 0 0;
+  margin: 6px 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: 6px;
 }
 
 .bundle-list label {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.4rem 0.55rem;
-  border: 1px solid #eee;
-  border-radius: 7px;
+  gap: 9px;
+  padding: 7px 10px;
+  background: var(--bg-app);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
   cursor: pointer;
-  font-size: 0.875rem;
+  font-size: 13px;
 }
-
-.bundle-list input { accent-color: #4a7dff; }
-.bundle-rate { min-width: 3.2rem; text-align: right; color: #777; font-size: 0.8rem; }
-.bundle-sum { margin: 0.1rem 0 0.2rem; }
-.bundle-sum .howto { margin-left: 0.4rem; }
+.bundle-list input { width: 15px; height: 15px; accent-color: var(--teal); flex: none; }
+.bundle-list .order-name { font-size: 13px; }
+.bundle-rate { min-width: 52px; text-align: right; color: var(--fg-faint); font-size: 12px; }
+.bundle-sum { margin: 2px 0; }
+.bundle-sum .howto { margin-left: 4px; }
 
 .howto {
   border: none;
   background: none;
   padding: 0;
   font: inherit;
-  font-size: 0.82rem;
-  color: #4a7dff;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--teal);
   cursor: pointer;
-  text-decoration: underline;
+}
+.howto:hover { color: var(--teal-dark); }
+
+/* ---- No horizontal scroll: shed the wide columns first ---- */
+@media (max-width: 1200px) {
+  th.col-wide, td.col-wide { display: none; }
+}
+
+@media (max-width: 980px) {
+  .stats, .strategies { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 860px) {
+  .page { padding: 28px 20px 60px; }
+  .plan-name { display: none; }
+  td.quiet, td.payoff { font-size: 11px; }
 }
 </style>

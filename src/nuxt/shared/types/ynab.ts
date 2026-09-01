@@ -60,3 +60,36 @@ export type MonthSummary = {
 export type MonthDetail = MonthSummary & {
   categories: Category[]
 }
+
+// Scheduled transactions (bills & expected income). Amounts are milliunits;
+// negative = outflow (a bill), positive = inflow (income).
+export type ScheduledFrequency =
+  | 'never' | 'daily' | 'weekly' | 'everyOtherWeek' | 'twiceAMonth'
+  | 'every4Weeks' | 'monthly' | 'everyOtherMonth' | 'every3Months'
+  | 'every4Months' | 'twiceAYear' | 'yearly' | 'everyOtherYear'
+
+export type ScheduledTransaction = {
+  id: string
+  date_first: string
+  date_next: string
+  frequency: ScheduledFrequency
+  amount: number
+  payee_name?: string | null
+  category_name?: string | null
+  account_name?: string | null
+  transfer_account_id?: string | null
+  deleted?: boolean
+}
+
+// One register row, normalized across sources (zip register or the API).
+// amount is milliunits, negative = outflow. `transfer` rows move money between
+// accounts — they net to zero for balances and are ignored by recurring
+// detection.
+export type BudgetTransaction = {
+  date: string          // ISO YYYY-MM-DD
+  payee: string
+  amount: number
+  account: string
+  category?: string | null
+  transfer?: boolean
+}

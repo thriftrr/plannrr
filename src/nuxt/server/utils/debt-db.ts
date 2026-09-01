@@ -1,4 +1,4 @@
-import { and, asc, eq } from 'drizzle-orm'
+import { and, asc, eq, like } from 'drizzle-orm'
 import type { H3Event } from 'h3'
 import { nextMonthKey } from './ynab-import'
 
@@ -33,6 +33,10 @@ export interface DebtRecord {
 export async function debtOwner (event: H3Event): Promise<string | null> {
   const user = await getSessionUser(event)
   if (user) return user.id
+  // The anonymous "__env__" owner exists for dev/personal no-login mode. In
+  // production it would let every unauthenticated visitor share one dataset
+  // (and, with an env PAT set, the operator's YNAB) — so it is dev-only.
+  if (!import.meta.dev) return null
   const { ynabPersonalAccessToken } = useRuntimeConfig()
   return ynabPersonalAccessToken ? '__env__' : null
 }
@@ -299,6 +303,70 @@ export async function putDebtSettings (owner: string, input: Partial<DebtSetting
   }
   await kv.set(settingsKey(owner), next)
   return next
+}
+
+// Plan ids this owner has previously synced live debts from, recovered from
+// the rows' source keys (`<planId>:<accountName>` — plan ids are uuids, so the
+// first colon is unambiguous).
+export async function syncedLivePlanIds (owner: string): Promise<string[]> {
+  const rows = await db.select({ sourceKey: schema.debts.sourceKey }).from(schema.debts)
+    .where(and(eq(schema.debts.userId, owner), eq(schema.debts.source, 'ynab')))
+    .all()
+  const ids = new Set<string>()
+  for (const row of rows) {
+    const id = row.sourceKey?.split(':')[0]
+    if (id) ids.add(id)
+  }
+  return [...ids]
+}
+
+// ---- Sync throttle ---------------------------------------------------------
+// Live YNAB syncs are limited to one per owner per cooldown window, protecting
+// YNAB's API budget (200 requests/hour) from an eager sync button. Imports
+// aren't throttled — they only read local KV. The stamp is recorded on
+// SUCCESSFUL syncs, so a failed attempt can be retried immediately.
+export const SYNC_COOLDOWN_SECONDS = 120
+
+const syncStampKey = (owner: string) => `debt:sync-stamp:${owner}`
+
+export async function assertSyncAllowed (owner: string): Promise<void> {
+  const stamp = await kv.get<string>(syncStampKey(owner))
+  if (!stamp) return
+  const elapsed = (Date.now() - new Date(stamp).getTime()) / 1000
+  if (!Number.isFinite(elapsed) || elapsed < 0 || elapsed >= SYNC_COOLDOWN_SECONDS) return
+  const wait = Math.ceil(SYNC_COOLDOWN_SECONDS - elapsed)
+  throw createError({
+    statusCode: 429,
+    statusMessage: `Synced ${Math.floor(elapsed)}s ago — you can sync again in ${wait}s`
+  })
+}
+
+export async function recordSync (owner: string): Promise<void> {
+  await kv.set(syncStampKey(owner), new Date().toISOString())
+}
+
+// Removes the debt rows a budget source produced. Used when a source is
+// deleted — the user chose "delete everything from that source".
+export async function deleteDebtsFromSource (owner: string, source: 'ynab' | 'import', keyPrefix: string): Promise<number> {
+  const rows = await db.delete(schema.debts)
+    .where(and(
+      eq(schema.debts.userId, owner),
+      eq(schema.debts.source, source),
+      like(schema.debts.sourceKey, `${keyPrefix}:%`)
+    ))
+    .returning({ id: schema.debts.id })
+  return rows.length
+}
+
+export async function countDebtsFromSource (owner: string, source: 'ynab' | 'import', keyPrefix: string): Promise<number> {
+  const rows = await db.select({ id: schema.debts.id }).from(schema.debts)
+    .where(and(
+      eq(schema.debts.userId, owner),
+      eq(schema.debts.source, source),
+      like(schema.debts.sourceKey, `${keyPrefix}:%`)
+    ))
+    .all()
+  return rows.length
 }
 
 export async function lastSyncedAt (userId: string): Promise<string | null> {

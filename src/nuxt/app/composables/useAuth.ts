@@ -1,6 +1,10 @@
 export interface AuthUser {
   email: string
   hasPat: boolean
+  firstName: string | null
+  lastName: string | null
+  currency: string
+  avatarUrl: string | null
 }
 
 // Session state shared across pages; refreshed from /api/auth/me.
@@ -8,9 +12,21 @@ export function useAuth () {
   const user = useState<AuthUser | null>('auth-user', () => null)
   const loaded = useState<boolean>('auth-loaded', () => false)
 
+  // What to call someone: their first name if we have one, otherwise
+  // everything before the @ in their email.
+  const displayName = computed(() => {
+    const first = user.value?.firstName?.trim()
+    if (first) return first
+    return user.value?.email?.split('@')[0]?.trim() ?? ''
+  })
+
   async function refresh () {
     try {
-      const data = await $fetch<{ user: AuthUser | null }>('/api/auth/me')
+      // During SSR, internal $fetch does NOT forward the browser's cookies, so
+      // the session has to be passed through explicitly — otherwise every
+      // server-rendered request looks signed out.
+      const headers = import.meta.server ? useRequestHeaders(['cookie']) : undefined
+      const data = await $fetch<{ user: AuthUser | null }>('/api/auth/me', { headers })
       user.value = data.user
     } catch {
       user.value = null
@@ -24,5 +40,5 @@ export function useAuth () {
     user.value = null
   }
 
-  return { user, loaded, refresh, logout }
+  return { user, loaded, displayName, refresh, logout }
 }

@@ -1,12 +1,15 @@
 import type { H3Event } from 'h3'
-import type { MonthDetail, MonthSummary, PlanSummary } from '#shared/types/ynab'
+import type { BudgetTransaction, MonthDetail, MonthSummary, PlanSummary, ScheduledTransaction } from '#shared/types/ynab'
 import type { ParsedImport } from './ynab-import'
 
-// Resolves which data backs a request, in priority order:
+// ============================================================================
+// Resolves which data backs a request. LOCAL-FIRST: pages never touch YNAB.
+//
 // 1. Mock fixtures (NUXT_YNAB_MOCK) — the public no-login demo
-// 2. Imported plans (ids starting "imp_") — stored per user in KV
-// 3. The YNAB API, authorized by the signed-in user's stored PAT, falling
-//    back to the server's env PAT (personal single-user mode)
+// 2. Snapshot sources ("src_" ids) — synced, imported, or manual budgets,
+//    stored locally; YNAB is only reached by explicit sync actions
+// 3. Legacy zip imports ("imp_" ids) — the pre-sources import format
+// ============================================================================
 
 const IMPORT_PREFIX = 'imp_'
 const isImportedPlanId = (planId: string) => planId.startsWith(IMPORT_PREFIX)
@@ -21,6 +24,10 @@ export async function resolvePat (event: H3Event): Promise<string | null> {
       if (pat) return pat
     }
   }
+  // The env PAT is a dev/personal-mode convenience ONLY. In production it must
+  // never back an arbitrary session — that would hand every signed-in user
+  // (and their sync/push actions) the operator's own YNAB account.
+  if (!import.meta.dev) return null
   const { ynabPersonalAccessToken } = useRuntimeConfig()
   return ynabPersonalAccessToken || null
 }
@@ -35,29 +42,24 @@ export async function getPlansForRequest (event: H3Event): Promise<{
     return { ...resolveYnabMock('/plans') as { plans: PlanSummary[], default_plan: PlanSummary | null }, pat_error: false }
   }
 
+  const owner = await debtOwner(event)
+  if (!owner) return { plans: [], default_plan: null, pat_error: false }
+
   const plans: PlanSummary[] = []
   let defaultPlan: PlanSummary | null = null
-  let patError = false
 
-  const user = await getSessionUser(event)
-  if (user) {
-    for (const row of await listImportedPlans(user.id)) {
-      plans.push({ id: row.id, name: `${row.name} (import)`, currency_format: { iso_code: 'USD', currency_symbol: '$' } })
+  for (const row of await listPlanSources(owner)) {
+    const summary: PlanSummary = {
+      id: row.id,
+      name: row.kind === 'imported' ? `${row.name} (import)` : row.name,
+      currency_format: { iso_code: row.currencyCode || 'USD', currency_symbol: '$' }
     }
+    plans.push(summary)
+    // The first synced budget is the most natural default.
+    if (!defaultPlan && row.kind === 'synced') defaultPlan = summary
   }
 
-  const pat = await resolvePat(event)
-  if (pat) {
-    try {
-      const live = await ynabApi<{ plans: PlanSummary[], default_plan: PlanSummary | null }>(pat, '/plans')
-      plans.push(...live.plans)
-      defaultPlan = live.default_plan
-    } catch {
-      patError = true
-    }
-  }
-
-  return { plans, default_plan: defaultPlan ?? plans[0] ?? null, pat_error: patError }
+  return { plans, default_plan: defaultPlan ?? plans[0] ?? null, pat_error: false }
 }
 
 async function loadImport (event: H3Event, planId: string): Promise<ParsedImport> {
@@ -67,18 +69,26 @@ async function loadImport (event: H3Event, planId: string): Promise<ParsedImport
   return parsed
 }
 
+async function loadSourceSnapshot (event: H3Event, sourceId: string) {
+  const owner = await debtOwner(event)
+  if (!owner) throw createError({ statusCode: 401, statusMessage: 'Sign in required' })
+  const snapshot = await loadSnapshot(owner, sourceId)
+  if (!snapshot) throw createError({ statusCode: 404, statusMessage: 'Budget source not found' })
+  return snapshot
+}
+
 export async function getMonthsForPlan (event: H3Event, planId: string): Promise<MonthSummary[]> {
   const { ynabMock } = useRuntimeConfig()
   if (ynabMock) {
     return (resolveYnabMock(`/plans/${planId}/months`) as { months: MonthSummary[] }).months
   }
+  if (isSourcePlanId(planId)) {
+    return snapshotMonths(await loadSourceSnapshot(event, planId))
+  }
   if (isImportedPlanId(planId)) {
     return importedMonthSummaries(await loadImport(event, planId))
   }
-  const pat = await resolvePat(event)
-  if (!pat) throw createError({ statusCode: 401, statusMessage: 'No YNAB token available' })
-  const { months } = await ynabApi<{ months: MonthSummary[] }>(pat, `/plans/${planId}/months`)
-  return months
+  throw createError({ statusCode: 404, statusMessage: 'Unknown budget source — re-sync from the Account page' })
 }
 
 export async function getMonthDetailForPlan (event: H3Event, planId: string, month: string): Promise<MonthDetail> {
@@ -86,15 +96,53 @@ export async function getMonthDetailForPlan (event: H3Event, planId: string, mon
   if (ynabMock) {
     return (resolveYnabMock(`/plans/${planId}/months/${month}`) as { month: MonthDetail }).month
   }
+  if (isSourcePlanId(planId)) {
+    const detail = snapshotMonthDetail(await loadSourceSnapshot(event, planId), month)
+    if (!detail) throw createError({ statusCode: 404, statusMessage: `No data for ${month}` })
+    return detail
+  }
   if (isImportedPlanId(planId)) {
     const detail = importedMonthDetail(await loadImport(event, planId), month)
     if (!detail) throw createError({ statusCode: 404, statusMessage: `No data for ${month}` })
     return detail
   }
-  const pat = await resolvePat(event)
-  if (!pat) throw createError({ statusCode: 401, statusMessage: 'No YNAB token available' })
-  const detail = await ynabApi<{ month: MonthDetail }>(pat, `/plans/${planId}/months/${month}`)
-  return detail.month
+  throw createError({ statusCode: 404, statusMessage: 'Unknown budget source — re-sync from the Account page' })
+}
+
+export async function getScheduledForPlan (event: H3Event, planId: string): Promise<ScheduledTransaction[]> {
+  const { ynabMock } = useRuntimeConfig()
+  if (ynabMock) {
+    const res = resolveYnabMock(`/plans/${planId}/scheduled_transactions`) as { scheduled_transactions?: ScheduledTransaction[] }
+    return (res.scheduled_transactions ?? []).filter(txn => !txn.deleted)
+  }
+  if (isSourcePlanId(planId)) {
+    return (await loadSourceSnapshot(event, planId)).scheduled
+  }
+  // Legacy zip imports carry no schedule.
+  return []
+}
+
+export async function getTransactionsForPlan (event: H3Event, planId: string): Promise<{
+  transactions: BudgetTransaction[]
+  balance_now: number | null
+}> {
+  const { ynabMock } = useRuntimeConfig()
+  if (ynabMock) {
+    const res = resolveYnabMock(`/plans/${planId}/transactions`) as { transactions?: BudgetTransaction[], balance_now?: number | null }
+    return { transactions: res.transactions ?? [], balance_now: res.balance_now ?? null }
+  }
+  if (isSourcePlanId(planId)) {
+    const snapshot = await loadSourceSnapshot(event, planId)
+    return { transactions: snapshot.transactions ?? [], balance_now: snapshot.accountBalanceNow ?? null }
+  }
+  if (isImportedPlanId(planId)) {
+    const parsed = await loadImport(event, planId)
+    // Zip registers are complete history, so their net IS the balance.
+    const transactions = parsed.transactions ?? []
+    const balance = transactions.length ? transactions.reduce((sum, txn) => sum + txn.amount, 0) : null
+    return { transactions, balance_now: balance }
+  }
+  return { transactions: [], balance_now: null }
 }
 
 export { IMPORT_PREFIX, importKey }

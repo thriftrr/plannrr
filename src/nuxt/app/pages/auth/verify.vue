@@ -1,4 +1,7 @@
 <script setup lang="ts">
+definePageMeta({ layout: 'auth' })
+useHead({ title: 'Signing in…' })
+
 const route = useRoute()
 const { refresh } = useAuth()
 const state = ref<'working' | 'error'>('working')
@@ -14,7 +17,7 @@ onMounted(async () => {
   try {
     await $fetch('/api/auth/verify', { method: 'POST', body: { token } })
     await refresh()
-    await navigateTo('/sandbox')
+    await navigateTo('/')
   } catch (cause: unknown) {
     const err = cause as { data?: { statusMessage?: string } }
     state.value = 'error'
@@ -24,26 +27,37 @@ onMounted(async () => {
 </script>
 
 <template>
-  <main class="page">
-    <h1><NuxtLink to="/">YNABRR</NuxtLink></h1>
-    <p v-if="state === 'working'">Signing you in…</p>
-    <template v-else>
-      <p class="error">{{ message }}</p>
-      <p><NuxtLink to="/login">Request a new link</NuxtLink></p>
-    </template>
+  <main class="wrap">
+    <NuxtLink to="/" class="y-wordmark mark">Plannrr<span>.</span></NuxtLink>
+    <section class="panel">
+      <p v-if="state === 'working'" class="y-body">Signing you in…</p>
+      <template v-else>
+        <h1>That link didn't work</h1>
+        <p class="y-error msg">{{ message }}</p>
+        <NuxtLink to="/login" class="again">Request a new link</NuxtLink>
+      </template>
+    </section>
   </main>
 </template>
 
 <style scoped>
-.page {
-  max-width: 26rem;
-  margin: 0 auto;
-  padding: 3rem 1.5rem;
-  font-family: system-ui, sans-serif;
-  line-height: 1.5;
+.wrap { display: flex; flex-direction: column; align-items: center; }
+
+.mark { font-size: 26px; }
+
+.panel {
+  margin-top: 28px;
+  width: 400px;
+  max-width: 100%;
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: var(--r-panel);
+  padding: 28px;
+  box-shadow: var(--shadow-card);
+  text-align: center;
 }
 
-h1 { margin: 0 0 1rem; }
-h1 a { color: inherit; text-decoration: none; }
-.error { color: #b3261e; }
+h1 { font-size: 18px; }
+.msg { margin: 8px 0 0; font-size: 13.5px; }
+.again { display: inline-block; margin-top: 14px; font-weight: 700; font-size: 13.5px; }
 </style>

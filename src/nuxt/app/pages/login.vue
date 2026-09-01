@@ -1,4 +1,7 @@
 <script setup lang="ts">
+definePageMeta({ layout: 'auth' })
+useHead({ title: 'Sign in' })
+
 const email = ref('')
 const sending = ref(false)
 const sent = ref(false)
@@ -23,100 +26,100 @@ async function submit () {
     sending.value = false
   }
 }
+
+function reset () {
+  sent.value = false
+  devLink.value = ''
+}
 </script>
 
 <template>
-  <main class="page">
-    <h1><NuxtLink to="/">YNABRR</NuxtLink> <span class="crumb">/ Sign in</span></h1>
+  <main class="wrap">
+    <NuxtLink to="/" class="y-wordmark mark">Plannrr<span>.</span></NuxtLink>
+    <div class="tagline">A YNAB planning companion</div>
 
-    <section v-if="!sent" class="card">
-      <h2>Sign in with email</h2>
-      <p>No password — we'll email you a sign-in link that's valid for 15 minutes.</p>
-      <form @submit.prevent="submit">
+    <section v-if="!sent" class="panel">
+      <h1>Sign in with email</h1>
+      <p class="y-body">
+        No password — we'll email you a sign-in link that's valid for 15 minutes.
+      </p>
+      <!-- onsubmit guard: before hydration attaches the Vue handler, a native
+           submit would GET /login and reload the page, wiping the form. The
+           inline attribute blocks that from the very first paint. -->
+      <form onsubmit="return false" @submit.prevent="submit">
         <input
           v-model="email"
+          class="y-input"
           type="email"
           required
           placeholder="you@example.com"
           aria-label="Email address"
           autocomplete="email"
         >
-        <button class="primary" type="submit" :disabled="sending">
+        <button class="y-btn send" type="submit" :disabled="sending">
           {{ sending ? 'Sending…' : 'Email me a link' }}
         </button>
       </form>
-      <p v-if="error" class="error">{{ error }}</p>
+      <p v-if="error" class="y-error err">{{ error }}</p>
     </section>
 
-    <section v-else class="card">
-      <h2>Check your email</h2>
-      <p>We sent a sign-in link to <strong>{{ email }}</strong>. It expires in 15 minutes.</p>
-      <p v-if="devLink" class="dev-link">
-        Dev mode — the link is also in the server console:<br>
-        <a :href="devLink">{{ devLink }}</a>
+    <section v-else class="panel">
+      <h1>Check your email 📬</h1>
+      <p class="y-body">
+        We sent a sign-in link to <b>{{ email }}</b>. It expires in 15 minutes.
       </p>
+      <div v-if="devLink" class="y-note dev">
+        Dev mode — the link is also in the server console:<br>
+        <a :href="devLink" class="dev-url">{{ devLink }}</a>
+      </div>
+      <button class="y-btn-link back" @click="reset">← Use a different email</button>
     </section>
   </main>
 </template>
 
 <style scoped>
-.page {
-  max-width: 26rem;
-  margin: 0 auto;
-  padding: 3rem 1.5rem;
-  font-family: system-ui, sans-serif;
-  line-height: 1.5;
+.wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
-h1 { margin: 0 0 1.5rem; }
-h1 a { color: inherit; text-decoration: none; }
-.crumb { color: #999; font-weight: 400; }
+.mark { font-size: 26px; }
 
-.card {
-  padding: 1.25rem 1.5rem;
-  border: 1px solid #ddd;
-  border-radius: 8px;
+.tagline {
+  margin-top: 4px;
+  font-size: 13.5px;
+  color: var(--fg-subtle);
 }
 
-.card h2 { margin: 0 0 0.5rem; }
-.card p { margin: 0.4rem 0; color: #555; }
+.panel {
+  margin-top: 28px;
+  width: 400px;
+  max-width: 100%;
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: var(--r-panel);
+  padding: 28px;
+  box-shadow: var(--shadow-card);
+}
+
+h1 { font-size: 18px; }
+
+.panel p { margin: 8px 0 0; }
 
 form {
+  margin-top: 18px;
   display: flex;
-  gap: 0.5rem;
-  margin-top: 1rem;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 10px;
 }
 
-input {
-  flex: 1;
-  min-width: 12rem;
-  padding: 0.5rem 0.7rem;
-  border: 1px solid #ccc;
-  border-radius: 6px;
-  font: inherit;
-}
+.send { padding: 11px 13px; font-size: 14px; }
 
-.primary {
-  padding: 0.5rem 1rem;
-  border: 1px solid #4a7dff;
-  border-radius: 6px;
-  background: #4a7dff;
-  color: #fff;
-  font: inherit;
-  cursor: pointer;
-}
+.err { margin-top: 12px; font-size: 13.5px; }
 
-.primary:disabled { opacity: 0.6; }
+.dev { margin-top: 14px; }
+.dev-url { word-break: break-all; font-weight: 700; }
 
-.error { color: #b3261e; }
-
-.dev-link {
-  padding: 0.6rem 0.8rem;
-  background: #fff8e1;
-  border: 1px solid #ffe08a;
-  border-radius: 6px;
-  font-size: 0.85rem;
-  word-break: break-all;
-}
+.back { margin-top: 14px; }
 </style>

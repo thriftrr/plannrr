@@ -46,24 +46,13 @@ export default defineEventHandler(async (event) => {
     if (!pat) {
       liveError = true
     } else {
+      // Same per-owner window as the Account page's re-sync button.
+      await assertSyncAllowed(owner)
       try {
-        const sources = await fetchLiveDebtSources(pat, liveIds)
-        for (const source of sources) {
-          for (const account of source.accounts) {
-            const result = await upsertSyncedDebt(owner, 'ynab', `${source.planId}:${account.name}`, {
-              planName: source.planName,
-              name: account.name,
-              startDate: account.startDate,
-              startBalance: account.startBalance,
-              balance: account.balance,
-              paidIn: account.paidIn,
-              rate: account.rate,
-              minimumPayment: account.minimumPayment,
-              history: account.history
-            })
-            result === 'created' ? created++ : updated++
-          }
-        }
+        const counts = await syncLiveDebtPlans(owner, pat, liveIds)
+        created += counts.created
+        updated += counts.updated
+        await recordSync(owner)
       } catch {
         liveError = true
       }

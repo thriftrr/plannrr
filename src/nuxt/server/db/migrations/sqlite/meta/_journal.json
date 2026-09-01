@@ -29,6 +29,27 @@
       "when": 1788189975134,
       "tag": "0003_numerous_lucky_pierre",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1788196630025,
+      "tag": "0004_profile_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1788200861790,
+      "tag": "0005_story_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1788203173938,
+      "tag": "0006_plan_sources",
+      "breakpoints": true
     }
   ]
 }

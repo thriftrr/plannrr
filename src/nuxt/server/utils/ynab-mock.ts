@@ -1,4 +1,4 @@
-import type { Category, CategoryGroupWithCategories, MonthSummary, PlanSummary } from '#shared/types/ynab'
+import type { Category, CategoryGroupWithCategories, MonthSummary, PlanSummary, ScheduledTransaction } from '#shared/types/ynab'
 
 // Static fixtures served when NUXT_YNAB_MOCK is set, so the app can be
 // developed and demoed without a YNAB token or any real account access.
@@ -115,7 +115,56 @@ const archivedCategories: Category[] = [
 const monthRow = (month: string, income: number, budgeted: number, activity: number, tbb: number): MonthSummary =>
   ({ month, income, budgeted, activity, to_be_budgeted: tbb, deleted: false })
 
-type MockPlanData = { plan: PlanSummary, months: MonthSummary[], categories: Category[] }
+type MockPlanData = { plan: PlanSummary, months: MonthSummary[], categories: Category[], scheduled?: ScheduledTransaction[] }
+
+// Bills and expected income for the calendar. date_first sits in early 2026 so
+// every mock month (Jun–Sep 2026) gets occurrences; date_next reflects the
+// first occurrence after the mock "today" (Aug 31 2026).
+const familyScheduled: ScheduledTransaction[] = [
+  {
+    id: 's-rent', date_first: '2026-01-01', date_next: '2026-09-01', frequency: 'monthly',
+    amount: -1_850_000, payee_name: '🏠 Hometown Property Mgmt', category_name: 'Rent', account_name: 'Joint Checking'
+  },
+  {
+    id: 's-paycheck', date_first: '2026-01-03', date_next: '2026-09-03', frequency: 'twiceAMonth',
+    amount: 2_800_000, payee_name: '💼 Acme Payroll', category_name: null, account_name: 'Joint Checking'
+  },
+  {
+    id: 's-internet', date_first: '2026-01-05', date_next: '2026-09-05', frequency: 'monthly',
+    amount: -80_000, payee_name: '📡 Fibre One Internet', category_name: 'Internet', account_name: 'Joint Checking'
+  },
+  {
+    id: 's-electric', date_first: '2026-01-12', date_next: '2026-09-12', frequency: 'monthly',
+    amount: -120_000, payee_name: '⚡ City Power & Light', category_name: 'Electric', account_name: 'Joint Checking'
+  },
+  {
+    id: 's-rv-loan', date_first: '2026-01-15', date_next: '2026-09-15', frequency: 'monthly',
+    amount: -204_290, payee_name: 'RV Loan', category_name: null, account_name: 'Joint Checking'
+  },
+  {
+    id: 's-car-ins', date_first: '2026-01-18', date_next: '2026-09-18', frequency: 'monthly',
+    amount: -145_000, payee_name: '🚗 Car Insurance', category_name: 'Car Insurance', account_name: 'Joint Checking'
+  },
+  {
+    id: 's-truck-loan', date_first: '2026-01-20', date_next: '2026-09-20', frequency: 'monthly',
+    amount: -310_000, payee_name: 'Truck Loan', category_name: null, account_name: 'Joint Checking'
+  },
+  {
+    id: 's-water', date_first: '2026-02-25', date_next: '2026-11-25', frequency: 'every3Months',
+    amount: -90_000, payee_name: '🚿 Water Bill', category_name: 'Water Bill', account_name: 'Joint Checking'
+  }
+]
+
+const partnerScheduled: ScheduledTransaction[] = [
+  {
+    id: 'ps-phone', date_first: '2026-01-06', date_next: '2026-09-06', frequency: 'monthly',
+    amount: -65_000, payee_name: '📱 Phone', category_name: 'Phone', account_name: 'Partner Checking'
+  },
+  {
+    id: 'ps-paycheck', date_first: '2026-01-10', date_next: '2026-09-10', frequency: 'everyOtherWeek',
+    amount: 950_000, payee_name: '💰 Paycheck — Mel', category_name: null, account_name: 'Partner Checking'
+  }
+]
 
 const mockDb: Record<string, MockPlanData> = {
   'mock-plan-1': {
@@ -131,7 +180,8 @@ const mockDb: Record<string, MockPlanData> = {
       monthRow('2026-07-01', 6_450_000, 4_890_000, -4_812_330, 45_000),
       monthRow('2026-06-01', 6_400_000, 4_890_000, -4_701_120, 20_000)
     ],
-    categories: familyCategories
+    categories: familyCategories,
+    scheduled: familyScheduled
   },
   'mock-plan-2': {
     plan: {
@@ -146,7 +196,8 @@ const mockDb: Record<string, MockPlanData> = {
       monthRow('2026-07-01', 3_100_000, 655_000, -641_200, 95_000),
       monthRow('2026-06-01', 3_050_000, 655_000, -602_100, 60_000)
     ],
-    categories: partnerCategories
+    categories: partnerCategories,
+    scheduled: partnerScheduled
   },
   'mock-plan-3': {
     plan: {
@@ -257,6 +308,50 @@ export function resolveMockDebtRecords () {
   ]
 }
 
+
+// ---- Mock register --------------------------------------------------------
+// Seven months of believable history for the family budget, so recurring
+// detection has patterns to find: exact monthly bills (gold), a drifting
+// utility (payee+day), twice-monthly paychecks, and noisy groceries/coffee
+// that should surface only as suggestions.
+
+function mockTransactions (): { transactions: BudgetTransaction[], balance_now: number } {
+  const txns: BudgetTransaction[] = []
+  const push = (date: string, payee: string, amount: number, category: string | null = null, transfer = false) =>
+    txns.push({ date, payee, amount, account: 'Joint Checking', category, transfer })
+  const day = (m: number, d: number) => `2026-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+
+  // deterministic pseudo-noise so the fixture is stable across restarts
+  let seed = 42
+  const noise = (range: number) => {
+    seed = (seed * 48271) % 2147483647
+    return (seed % (2 * range + 1)) - range
+  }
+
+  for (let m = 2; m <= 8; m++) {
+    push(day(m, 1), '🏠 Hometown Property Mgmt', -1_850_000, 'Rent')                          // gold: same day, same amount
+    push(day(m, 5), '📡 Fibre One Internet', -79_990, 'Internet')                                 // gold
+    push(day(m, 21), '🎵 Spotify', -11_990, 'Subscriptions')                                           // gold
+    push(day(m, 12 + Math.max(-2, Math.min(2, noise(2)))), '⚡ City Power & Light', -(98_000 + noise(18) * 1000), 'Electric') // payee+day, amount drifts
+    push(day(m, 3), '💼 Acme Payroll', 2_800_000, 'Inflow: Ready to Assign')
+    push(day(m, 15), 'Transfer : 🚐 RV Loan', -204_290, null, true)          // one-sided: leaves the budget                                     // income, twice a month
+    push(day(m, 18), '💼 Acme Payroll', 2_800_000, 'Inflow: Ready to Assign')
+    // groceries: several a month, drifting day and amount — a suggestion, not a certainty
+    const trips = 5 + (noise(1) + 1)
+    for (let t = 0; t < trips; t++) {
+      push(day(m, 2 + ((t * 5 + Math.abs(noise(2))) % 27)), '🛒 Green Basket Grocery', -(52_000 + Math.abs(noise(30)) * 1000), 'Groceries')
+    }
+    push(day(m, 6 + Math.abs(noise(3))), '☕ Cusp Coffee', -(6_000 + Math.abs(noise(3)) * 500), 'Dining Out')
+    if (m % 3 === 0) push(day(m, 14), '🔧 Hardware Barn', -(34_000 + Math.abs(noise(20)) * 1000), 'Home Maintenance') // one-offs
+  }
+  txns.sort((a, b) => a.date.localeCompare(b.date))
+  const net = txns.reduce((sum, t) => sum + t.amount, 0)
+  // balance anchor: pretend the account started the window with a cushion
+  return { transactions: txns, balance_now: net + 3_500_000 }
+}
+
+const MOCK_REGISTER = mockTransactions()
+
 export function resolveYnabMock (path: string): unknown {
   if (path === '/plans') {
     return {
@@ -283,6 +378,15 @@ export function resolveYnabMock (path: string): unknown {
       throw createError({ statusCode: 404, statusMessage: `No mock data for month ${key}` })
     }
     return { month: { ...summary, categories: db.categories } }
+  }
+
+  if (/^\/plans\/[^/]+\/scheduled_transactions$/.test(path)) {
+    return { scheduled_transactions: db.scheduled ?? [] }
+  }
+
+  if (/^\/plans\/[^/]+\/transactions$/.test(path)) {
+    if (planMatch?.[1] === 'mock-plan-1') return MOCK_REGISTER
+    return { transactions: [], balance_now: null }
   }
 
   if (/^\/plans\/[^/]+\/categories$/.test(path)) {

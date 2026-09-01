@@ -1,6 +1,6 @@
-# YNABRR
+# Plannrr
 
-A [YNAB](https://www.ynab.com/) planning companion: pull your plan down, see it clearly, play out "what if" scenarios, and sync the result back — plus a calendar view of bills and date-anchored goals.
+Plannrr (formerly YNABRR) is a budget planning companion that plays nicely with [YNAB](https://www.ynab.com/): pull your plan down, see it clearly, play out "what if" scenarios, and sync the result back — plus a calendar view of bills and date-anchored goals.
 
 Work is tracked on the [Linear RANDOM board](https://linear.app/thriftrr/team/RANDOM/all), flagged `[YNABRR]`.
 

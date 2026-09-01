@@ -20,7 +20,7 @@ export async function sendEmail (event: H3Event, message: EmailMessage): Promise
   if (binding && emailFrom) {
     await binding.send({
       to: message.to,
-      from: { email: emailFrom, name: 'YNABRR' },
+      from: { email: emailFrom, name: 'Plannrr' },
       subject: message.subject,
       text: message.text,
       html: message.html
@@ -34,7 +34,7 @@ export async function sendEmail (event: H3Event, message: EmailMessage): Promise
       headers: { Authorization: `Bearer ${cfEmailToken}` },
       body: {
         to: message.to,
-        from: { address: emailFrom, name: 'YNABRR' },
+        from: { address: emailFrom, name: 'Plannrr' },
         subject: message.subject,
         text: message.text,
         ...(message.html ? { html: message.html } : {})

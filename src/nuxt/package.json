@@ -1,5 +1,5 @@
 {
-  "name": "ynabrr",
+  "name": "plannrr",
   "type": "module",
   "private": true,
   "scripts": {
@@ -9,7 +9,8 @@
     "dev:test": "NUXT_YNAB_PERSONAL_ACCESS_TOKEN='' NUXT_YNAB_MOCK='' nuxt dev",
     "generate": "nuxt generate",
     "preview": "nuxt preview",
-    "postinstall": "nuxt prepare"
+    "postinstall": "nuxt prepare",
+    "deploy": "bash scripts/deploy.sh"
   },
   "dependencies": {
     "@libsql/client": "^0.17.4",
@@ -29,6 +30,7 @@
     "vue-router": "^5.2.0"
   },
   "devDependencies": {
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "wrangler": "^4.127.1"
   }
 }

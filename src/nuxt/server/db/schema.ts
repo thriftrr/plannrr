@@ -5,6 +5,13 @@ export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
   email: text('email').notNull().unique(),
   patCipher: text('pat_cipher'),
+  firstName: text('first_name'),
+  lastName: text('last_name'),
+  // ISO 4217. Applies to hand-tracked debts and no-YNAB mode; synced budgets
+  // format with whatever currency YNAB reports for that plan.
+  currency: text('currency').notNull().default('USD'),
+  // R2 object key for an uploaded avatar. Null = fall back to Gravatar.
+  avatarKey: text('avatar_key'),
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`)
 })
 
@@ -42,10 +49,32 @@ export const debts = sqliteTable('debts', {
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`)
 })
 
+// Historically zip imports only; now the unified registry of every budget
+// source — imported (zip), synced (YNAB snapshot), and manual (built by hand).
+// All three kinds keep their plan data in a local KV snapshot; nothing is
+// fetched from YNAB at page-load time.
 export const importedPlans = sqliteTable('imported_plans', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull(),
   name: text('name').notNull(),
   monthCount: integer('month_count').notNull(),
+  kind: text('kind').notNull().default('imported'), // imported | synced | manual
+  ynabPlanId: text('ynab_plan_id'),
+  currencyCode: text('currency_code').notNull().default('USD'),
+  lastSyncedAt: text('last_synced_at'),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`)
+})
+
+// Remembrr: hand-written debt-story timeline, one row per card. The whole
+// story is replaced atomically on save, ordered by position.
+export const storyEvents = sqliteTable('story_events', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  position: integer('position').notNull(),
+  dateLabel: text('date_label').notNull().default(''),
+  kind: text('kind').notNull(), // opened | closed | note
+  title: text('title').notNull().default(''),
+  amount: integer('amount').notNull().default(0), // milliunits
+  note: text('note').notNull().default(''),
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`)
 })
