@@ -1,4 +1,4 @@
-import type { CustomMonthly, RecurringPrefs } from '#shared/types/recurring'
+import type { AccountPrefs, CustomMonthly, ManualAccount, RecurringPrefs } from '#shared/types/recurring'
 
 // Storage + validation for per-source recurring-transaction preferences.
 // The shapes live in shared/types/recurring.ts so the client's detection
@@ -9,7 +9,38 @@ import type { CustomMonthly, RecurringPrefs } from '#shared/types/recurring'
 export const recurringPrefsKey = (owner: string, planId: string) => `recurring:${owner}:${planId}`
 
 export function defaultRecurringPrefs (): RecurringPrefs {
-  return { confirmed: [], dismissed: [], custom: [], startingBalance: null }
+  return { confirmed: [], dismissed: [], custom: [], startingBalance: null, accounts: { excluded: [], overrides: {}, manual: [] } }
+}
+
+const MAX_ACCOUNTS = 50
+const MAX_MILLI = 1_000_000_000_000
+
+function cleanAccounts (value: unknown): AccountPrefs {
+  const input = (value ?? {}) as Record<string, unknown>
+  const overrides: Record<string, number> = {}
+  if (input.overrides && typeof input.overrides === 'object') {
+    for (const [id, amount] of Object.entries(input.overrides as Record<string, unknown>).slice(0, MAX_ACCOUNTS)) {
+      if (id.length > 60 || typeof amount !== 'number' || !Number.isFinite(amount) || Math.abs(amount) > MAX_MILLI) continue
+      overrides[id] = Math.round(amount)
+    }
+  }
+  const manual: ManualAccount[] = []
+  if (Array.isArray(input.manual)) {
+    for (const raw of input.manual.slice(0, MAX_ACCOUNTS)) {
+      const item = raw as Record<string, unknown>
+      const name = typeof item.name === 'string' ? item.name.trim().slice(0, 80) : ''
+      const kind = item.kind === 'credit' ? 'credit' : 'cash'
+      const balance = typeof item.balance === 'number' && Number.isFinite(item.balance) ? Math.round(item.balance) : NaN
+      if (!name || !Number.isFinite(balance) || Math.abs(balance) > MAX_MILLI) continue
+      manual.push({
+        id: typeof item.id === 'string' && item.id.length <= 60 ? item.id : crypto.randomUUID(),
+        name,
+        kind,
+        balance: kind === 'credit' ? -Math.abs(balance) : Math.abs(balance)
+      })
+    }
+  }
+  return { excluded: cleanKeys(input.excluded).slice(0, MAX_ACCOUNTS), overrides, manual }
 }
 
 const MAX_KEYS = 200
@@ -50,6 +81,7 @@ export function validateRecurringPrefs (body: unknown): RecurringPrefs {
     confirmed: cleanKeys(input.confirmed),
     dismissed: cleanKeys(input.dismissed),
     custom,
-    startingBalance
+    startingBalance,
+    accounts: cleanAccounts(input.accounts)
   }
 }

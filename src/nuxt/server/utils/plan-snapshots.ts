@@ -1,4 +1,4 @@
-import type { BudgetTransaction, Category, CurrencyFormat, MonthDetail, MonthSummary, ScheduledTransaction } from '#shared/types/ynab'
+import type { BudgetAccount, BudgetTransaction, Category, CurrencyFormat, MonthDetail, MonthSummary, ScheduledTransaction } from '#shared/types/ynab'
 
 // ============================================================================
 // Local-first plan snapshots.
@@ -25,6 +25,9 @@ export interface PlanSnapshot {
   // any recent day is balanceNow minus the transactions after that day — no
   // need for the full account history.
   accountBalanceNow?: number | null
+  // The open on-budget accounts behind that sum, so the calendar can show
+  // each one and let a person count or edit it.
+  accounts?: BudgetAccount[]
   syncedAt?: string
 }
 
@@ -103,12 +106,14 @@ export async function snapshotYnabPlan (
 
   // Live balance anchor: what the on-budget accounts hold right now.
   let accountBalanceNow: number | null = null
+  let accounts: BudgetAccount[] = []
   try {
-    type ApiAccount = { on_budget?: boolean, closed?: boolean, deleted?: boolean, balance: number }
+    type ApiAccount = { id: string, name: string, type: string, on_budget?: boolean, closed?: boolean, deleted?: boolean, balance: number }
     const res = await ynabApi<{ accounts: ApiAccount[] }>(pat, `/plans/${plan.id}/accounts`)
-    accountBalanceNow = res.accounts
+    accounts = res.accounts
       .filter(a => a.on_budget && !a.closed && !a.deleted)
-      .reduce((sum, a) => sum + a.balance, 0)
+      .map(a => ({ id: a.id, name: a.name, type: a.type, balance: a.balance }))
+    accountBalanceNow = accounts.reduce((sum, a) => sum + a.balance, 0)
   } catch { /* the balance line falls back to net-of-register */ }
 
   return {
@@ -121,6 +126,7 @@ export async function snapshotYnabPlan (
     scheduled,
     transactions,
     accountBalanceNow,
+    accounts,
     syncedAt: new Date().toISOString()
   }
 }

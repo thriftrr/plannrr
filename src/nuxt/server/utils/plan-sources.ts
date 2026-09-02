@@ -1,5 +1,5 @@
 import type { H3Event } from 'h3'
-import type { BudgetTransaction, MonthDetail, MonthSummary, PlanSummary, ScheduledTransaction } from '#shared/types/ynab'
+import type { BudgetAccount, BudgetTransaction, MonthDetail, MonthSummary, PlanSummary, ScheduledTransaction } from '#shared/types/ynab'
 import type { ParsedImport } from './ynab-import'
 
 // ============================================================================
@@ -125,24 +125,25 @@ export async function getScheduledForPlan (event: H3Event, planId: string): Prom
 export async function getTransactionsForPlan (event: H3Event, planId: string): Promise<{
   transactions: BudgetTransaction[]
   balance_now: number | null
+  accounts: BudgetAccount[]
 }> {
   const { ynabMock } = useRuntimeConfig()
   if (ynabMock) {
-    const res = resolveYnabMock(`/plans/${planId}/transactions`) as { transactions?: BudgetTransaction[], balance_now?: number | null }
-    return { transactions: res.transactions ?? [], balance_now: res.balance_now ?? null }
+    const res = resolveYnabMock(`/plans/${planId}/transactions`) as { transactions?: BudgetTransaction[], balance_now?: number | null, accounts?: BudgetAccount[] }
+    return { transactions: res.transactions ?? [], balance_now: res.balance_now ?? null, accounts: res.accounts ?? [] }
   }
   if (isSourcePlanId(planId)) {
     const snapshot = await loadSourceSnapshot(event, planId)
-    return { transactions: snapshot.transactions ?? [], balance_now: snapshot.accountBalanceNow ?? null }
+    return { transactions: snapshot.transactions ?? [], balance_now: snapshot.accountBalanceNow ?? null, accounts: snapshot.accounts ?? [] }
   }
   if (isImportedPlanId(planId)) {
     const parsed = await loadImport(event, planId)
     // Zip registers are complete history, so their net IS the balance.
     const transactions = parsed.transactions ?? []
     const balance = transactions.length ? transactions.reduce((sum, txn) => sum + txn.amount, 0) : null
-    return { transactions, balance_now: balance }
+    return { transactions, balance_now: balance, accounts: [] }
   }
-  return { transactions: [], balance_now: null }
+  return { transactions: [], balance_now: null, accounts: [] }
 }
 
 export { IMPORT_PREFIX, importKey }

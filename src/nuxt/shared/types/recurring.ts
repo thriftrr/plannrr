@@ -13,12 +13,32 @@ export interface CustomMonthly {
   kind: 'bill' | 'income'
 }
 
+// An account added by hand (sources without live YNAB accounts, or one YNAB
+// doesn't know about). Credit balances are stored negative.
+export interface ManualAccount {
+  id: string
+  name: string
+  kind: 'cash' | 'credit'
+  balance: number       // milliunits
+}
+
+// Cash-on-hand choices per source: which accounts count, balances typed over
+// the synced ones, and hand-added accounts.
+export interface AccountPrefs {
+  excluded: string[]
+  overrides: Record<string, number>
+  manual: ManualAccount[]
+}
+
+export const emptyAccountPrefs = (): AccountPrefs => ({ excluded: [], overrides: {}, manual: [] })
+
 // Per-source recurring preferences, stored server-side.
 export interface RecurringPrefs {
   confirmed: string[]   // series keys the user promoted from suggestions
   dismissed: string[]   // series keys hidden even when detection is confident
   custom: CustomMonthly[]
   startingBalance: number | null // milliunits; balance seed when no register
+  accounts?: AccountPrefs
 }
 
 // One recurring pattern found in a source's register.

@@ -93,3 +93,15 @@ export type BudgetTransaction = {
   category?: string | null
   transfer?: boolean
 }
+
+// An on-budget account as the calendar's cash-on-hand list sees it. YNAB
+// reports liabilities (cards, lines of credit) as negative balances already.
+export interface BudgetAccount {
+  id: string
+  name: string
+  type: string
+  balance: number // milliunits
+}
+
+const CREDIT_TYPES = new Set(['creditCard', 'lineOfCredit', 'otherLiability', 'mortgage', 'autoLoan', 'studentLoan', 'personalLoan', 'medicalDebt', 'otherDebt'])
+export const accountKind = (type: string): 'cash' | 'credit' => CREDIT_TYPES.has(type) ? 'credit' : 'cash'

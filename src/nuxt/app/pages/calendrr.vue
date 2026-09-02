@@ -1,7 +1,10 @@
 <script setup lang="ts">
 useHead({ title: 'Calendrr' })
-import type { BudgetTransaction, Category, MonthDetail, MonthSummary, ScheduledTransaction } from '#shared/types/ynab'
+import type { BudgetAccount, BudgetTransaction, Category, MonthDetail, MonthSummary, ScheduledTransaction } from '#shared/types/ynab'
+import { accountKind } from '#shared/types/ynab'
 import type { CustomMonthly, DetectedSeries, RecurringPrefs } from '#shared/types/recurring'
+import { emptyAccountPrefs } from '#shared/types/recurring'
+import type { CashRow } from '~/components/CashPicker.vue'
 
 // Calendrr — bills, expected income, and goal target dates on a month grid,
 // with a cash-flow twist: past days chart what actually happened (the
@@ -26,7 +29,7 @@ type DayEvent = {
 
 const monthsByPlan = ref<Record<string, MonthSummary[]>>({})
 const schedByPlan = ref<Record<string, ScheduledTransaction[]>>({})
-const txnsByPlan = ref<Record<string, { transactions: BudgetTransaction[], balance_now: number | null }>>({})
+const txnsByPlan = ref<Record<string, { transactions: BudgetTransaction[], balance_now: number | null, accounts: BudgetAccount[] }>>({})
 const prefsByPlan = ref<Record<string, RecurringPrefs>>({})
 const kindByPlan = ref<Record<string, string>>({})
 const detailCache = new Map<string, MonthDetail | null>()
@@ -88,9 +91,10 @@ async function loadTransactions () {
   const missing = selectedIds.value.filter(id => !txnsByPlan.value[id])
   await Promise.all(missing.map(async (id) => {
     try {
-      txnsByPlan.value[id] = await $fetch<{ transactions: BudgetTransaction[], balance_now: number | null }>(`/api/ynab/${id}/transactions`)
+      const data = await $fetch<{ transactions: BudgetTransaction[], balance_now: number | null, accounts?: BudgetAccount[] }>(`/api/ynab/${id}/transactions`)
+      txnsByPlan.value[id] = { ...data, accounts: data.accounts ?? [] }
     } catch {
-      txnsByPlan.value[id] = { transactions: [], balance_now: null }
+      txnsByPlan.value[id] = { transactions: [], balance_now: null, accounts: [] }
     }
   }))
 }
@@ -99,9 +103,10 @@ async function loadPrefs () {
   const missing = selectedIds.value.filter(id => !prefsByPlan.value[id])
   await Promise.all(missing.map(async (id) => {
     try {
-      prefsByPlan.value[id] = await $fetch<RecurringPrefs>(`/api/recurring/${id}`)
+      const prefs = await $fetch<RecurringPrefs>(`/api/recurring/${id}`)
+      prefsByPlan.value[id] = { ...prefs, accounts: prefs.accounts ?? emptyAccountPrefs() }
     } catch {
-      prefsByPlan.value[id] = { confirmed: [], dismissed: [], custom: [], startingBalance: null }
+      prefsByPlan.value[id] = { confirmed: [], dismissed: [], custom: [], startingBalance: null, accounts: emptyAccountPrefs() }
     }
   }))
 }
@@ -280,6 +285,111 @@ function removeCustom (item: CustomMonthly & { sourceId: string }) {
   savePrefs(item.sourceId)
 }
 
+// ---- Cash on hand ----------------------------------------------------------
+// Every open on-budget account across the selected budgets (synced from
+// YNAB, or typed by hand), each counted or not, with the total anchoring the
+// balance line. Cards and credit lines carry negative balances, so the total
+// is what's actually spendable today.
+
+const cashFmt = (milliunits: number) => format(milliunits, selectedPlans.value[0]?.currency_format?.iso_code)
+
+const cashRows = computed<CashRow[]>(() => {
+  const rows: CashRow[] = []
+  for (const id of selectedIds.value) {
+    const sourceName = plans.value.find(p => p.id === id)?.name ?? 'Budget'
+    const prefs = prefsByPlan.value[id]?.accounts ?? emptyAccountPrefs()
+    for (const account of txnsByPlan.value[id]?.accounts ?? []) {
+      const override = prefs.overrides[account.id]
+      rows.push({
+        sourceId: id,
+        sourceName,
+        id: account.id,
+        name: account.name,
+        kind: accountKind(account.type),
+        balance: override ?? account.balance,
+        syncedBalance: account.balance,
+        overridden: override !== undefined,
+        manual: false,
+        included: !prefs.excluded.includes(account.id)
+      })
+    }
+    for (const account of prefs.manual) {
+      rows.push({
+        sourceId: id,
+        sourceName,
+        id: account.id,
+        name: account.name,
+        kind: account.kind,
+        balance: account.balance,
+        syncedBalance: null,
+        overridden: false,
+        manual: true,
+        included: !prefs.excluded.includes(account.id)
+      })
+    }
+  }
+  return rows
+})
+
+// Per source: the counted total, or null when the source lists no accounts
+// (then the register net / starting balance carries the line as before).
+const cashBySource = computed(() => {
+  const map = new Map<string, number>()
+  for (const row of cashRows.value) {
+    if (!row.included) { if (!map.has(row.sourceId)) map.set(row.sourceId, 0); continue }
+    map.set(row.sourceId, (map.get(row.sourceId) ?? 0) + row.balance)
+  }
+  return map
+})
+const cashOnHand = computed(() => cashRows.value.length ? [...cashBySource.value.values()].reduce((a, b) => a + b, 0) : null)
+const cashSources = computed(() => selectedIds.value.map(id => ({ id, name: plans.value.find(p => p.id === id)?.name ?? 'Budget' })))
+
+function accountPrefs (sourceId: string) {
+  const prefs = prefsByPlan.value[sourceId]
+  if (!prefs) return null
+  prefs.accounts ??= emptyAccountPrefs()
+  return prefs.accounts
+}
+function toggleAccount (row: CashRow) {
+  const prefs = accountPrefs(row.sourceId)
+  if (!prefs) return
+  prefs.excluded = prefs.excluded.includes(row.id) ? prefs.excluded.filter(x => x !== row.id) : [...prefs.excluded, row.id]
+  savePrefs(row.sourceId)
+}
+function setAccountBalance (row: CashRow, milliunits: number) {
+  const prefs = accountPrefs(row.sourceId)
+  if (!prefs) return
+  if (row.manual) {
+    const item = prefs.manual.find(a => a.id === row.id)
+    if (item) item.balance = milliunits
+  } else if (milliunits === row.syncedBalance) {
+    delete prefs.overrides[row.id]
+  } else {
+    prefs.overrides[row.id] = milliunits
+  }
+  savePrefs(row.sourceId)
+}
+function clearAccountOverride (row: CashRow) {
+  const prefs = accountPrefs(row.sourceId)
+  if (!prefs) return
+  delete prefs.overrides[row.id]
+  savePrefs(row.sourceId)
+}
+function addManualAccount (sourceId: string, name: string, kind: 'cash' | 'credit', balance: number) {
+  const prefs = accountPrefs(sourceId)
+  if (!prefs) return
+  prefs.manual.push({ id: `acct-${Math.random().toString(36).slice(2, 10)}`, name, kind, balance })
+  savePrefs(sourceId)
+}
+function removeManualAccount (row: CashRow) {
+  const prefs = accountPrefs(row.sourceId)
+  if (!prefs) return
+  prefs.manual = prefs.manual.filter(a => a.id !== row.id)
+  prefs.excluded = prefs.excluded.filter(x => x !== row.id)
+  delete prefs.overrides[row.id]
+  savePrefs(row.sourceId)
+}
+
 // ---- Balance line ----------------------------------------------------------
 
 // Everything a source expects to happen in a given month: detected series,
@@ -304,20 +414,29 @@ function projectedForSource (sourceId: string) {
 
 const mornings = computed(() => {
   if (!month.value) return null
-  const sources = selectedIds.value.map(id => ({
-    transactions: txnsByPlan.value[id]?.transactions ?? [],
-    balanceNow: txnsByPlan.value[id]?.balance_now ?? null,
-    startingBalance: prefsByPlan.value[id]?.startingBalance ?? null,
-    completeHistory: kindByPlan.value[id] === 'imported',
-    projectedFor: projectedForSource(id)
-  }))
+  const sources = selectedIds.value.map((id) => {
+    const cash = cashBySource.value.get(id)
+    const transactions = txnsByPlan.value[id]?.transactions ?? []
+    return {
+      transactions,
+      // Counted accounts win over the sync-time sum; with no register to
+      // anchor them, they're true as of today.
+      balanceNow: cash ?? txnsByPlan.value[id]?.balance_now ?? null,
+      anchorDate: cash !== undefined && !transactions.length ? todayIso : undefined,
+      startingBalance: prefsByPlan.value[id]?.startingBalance ?? null,
+      completeHistory: kindByPlan.value[id] === 'imported',
+      projectedFor: projectedForSource(id)
+    }
+  })
   return buildMorningBalances(sources, month.value, currentMonthKey)
 })
 
-// The "Starting balance" input appears only when nothing anchors the line.
+// The "Starting balance" input appears only when nothing anchors the line —
+// no register-backed balance and no accounts in the cash-on-hand list.
 const needsSeed = computed(() =>
   !selectedIds.value.some(id =>
-    (txnsByPlan.value[id]?.balance_now ?? null) !== null && (txnsByPlan.value[id]?.transactions.length ?? 0) > 0))
+    cashBySource.value.has(id)
+    || ((txnsByPlan.value[id]?.balance_now ?? null) !== null && (txnsByPlan.value[id]?.transactions.length ?? 0) > 0)))
 
 const seedInput = ref('')
 // Prefs land asynchronously, so repopulate whenever they (or the need) change —
@@ -758,6 +877,19 @@ const confidencePill: Record<string, { label: string, tone: string }> = {
         note="Bills and goals combine across selected budgets."
         @toggle="toggle"
       />
+      <CashPicker
+        v-if="!loading && !noPlans && !connectError"
+        :rows="cashRows"
+        :total="cashOnHand"
+        :sources="cashSources"
+        :multi-source="selectedIds.length > 1"
+        :fmt="cashFmt"
+        @toggle="toggleAccount"
+        @set-balance="setAccountBalance"
+        @clear-override="clearAccountOverride"
+        @remove="removeManualAccount"
+        @add="addManualAccount"
+      />
       <div class="legend">
         <span class="key"><span class="dot bill" />Bill</span>
         <span class="key"><span class="dot income" />Income</span>
@@ -992,7 +1124,7 @@ const confidencePill: Record<string, { label: string, tone: string }> = {
           @change="saveSeed"
           @keyup.enter="saveSeed"
         >
-        <div class="rail-hint">No register here — give the balance line a starting point for this month.</div>
+        <div class="rail-hint">No register or accounts here — give the balance line a starting point for this month, or add your accounts under “Cash on hand” above.</div>
       </div>
 
       <div v-if="saveNote" class="rail-hint note">{{ saveNote }}</div>

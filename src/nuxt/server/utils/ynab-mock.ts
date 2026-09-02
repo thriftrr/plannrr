@@ -1,4 +1,4 @@
-import type { Category, CategoryGroupWithCategories, MonthSummary, PlanSummary, ScheduledTransaction } from '#shared/types/ynab'
+import type { BudgetAccount, Category, CategoryGroupWithCategories, MonthSummary, PlanSummary, ScheduledTransaction } from '#shared/types/ynab'
 
 // Static fixtures served when NUXT_YNAB_MOCK is set, so the app can be
 // developed and demoed without a YNAB token or any real account access.
@@ -315,7 +315,7 @@ export function resolveMockDebtRecords () {
 // utility (payee+day), twice-monthly paychecks, and noisy groceries/coffee
 // that should surface only as suggestions.
 
-function mockTransactions (): { transactions: BudgetTransaction[], balance_now: number } {
+function mockTransactions (): { transactions: BudgetTransaction[], balance_now: number, accounts: BudgetAccount[] } {
   const txns: BudgetTransaction[] = []
   const push = (date: string, payee: string, amount: number, category: string | null = null, transfer = false) =>
     txns.push({ date, payee, amount, account: 'Joint Checking', category, transfer })
@@ -346,8 +346,15 @@ function mockTransactions (): { transactions: BudgetTransaction[], balance_now: 
   }
   txns.sort((a, b) => a.date.localeCompare(b.date))
   const net = txns.reduce((sum, t) => sum + t.amount, 0)
-  // balance anchor: pretend the account started the window with a cushion
-  return { transactions: txns, balance_now: net + 3_500_000 }
+  // balance anchor: pretend the account started the window with a cushion;
+  // split across the accounts the calendar's cash-on-hand list shows
+  const balanceNow = net + 3_500_000
+  const accounts: BudgetAccount[] = [
+    { id: 'acct-checking', name: 'Joint Checking', type: 'checking', balance: balanceNow - 1_200_000 + 480_000 },
+    { id: 'acct-savings', name: 'Rainy Day Savings', type: 'savings', balance: 1_200_000 },
+    { id: 'acct-visa', name: 'Visa Rewards', type: 'creditCard', balance: -480_000 }
+  ]
+  return { transactions: txns, balance_now: balanceNow, accounts }
 }
 
 const MOCK_REGISTER = mockTransactions()
@@ -386,7 +393,7 @@ export function resolveYnabMock (path: string): unknown {
 
   if (/^\/plans\/[^/]+\/transactions$/.test(path)) {
     if (planMatch?.[1] === 'mock-plan-1') return MOCK_REGISTER
-    return { transactions: [], balance_now: null }
+    return { transactions: [], balance_now: null, accounts: [] }
   }
 
   if (/^\/plans\/[^/]+\/categories$/.test(path)) {

@@ -309,6 +309,9 @@ export function customDateInMonth (day: number, monthKey: string): string {
 export interface BalanceSource {
   transactions: BudgetTransaction[]
   balanceNow: number | null
+  // When balanceNow comes from accounts typed by hand rather than a register,
+  // the date it's true for (today) — the chain projects forward from here.
+  anchorDate?: string
   // Editable seed for sources with no register; means "balance at the start
   // of the current real month".
   startingBalance: number | null
@@ -357,11 +360,11 @@ function sourceMornings (
     ? isoOf(y!, monthIndex, d)
     : shiftMonthKey(monthKey, 1)
 
-  // ---- register-anchored path ----
-  if (source.balanceNow !== null && source.transactions.length) {
+  // ---- register-anchored path (or a hand-typed balance anchored at today) ----
+  if (source.balanceNow !== null && (source.transactions.length || source.anchorDate)) {
     const txns = source.transactions
-    const anchor = txns[txns.length - 1]!.date
-    const first = txns[0]!.date
+    const anchor = txns.length ? txns[txns.length - 1]!.date : source.anchorDate!
+    const first = txns.length ? txns[0]!.date : anchor
     const monthEndIso = isoOf(y!, monthIndex, days)
 
     // A capped window can't see far enough back to be truthful.
