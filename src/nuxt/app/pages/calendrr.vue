@@ -325,7 +325,7 @@ const cashFmt = (milliunits: number) => format(milliunits, selectedPlans.value[0
 const cashRows = computed<CashRow[]>(() => {
   const rows: CashRow[] = []
   for (const id of selectedIds.value) {
-    const sourceName = plans.value.find(p => p.id === id)?.name ?? 'Budget'
+    const sourceName = plans.value.find(p => p.id === id)?.name ?? 'Plan'
     const prefs = prefsByPlan.value[id]?.accounts ?? emptyAccountPrefs()
     for (const account of txnsByPlan.value[id]?.accounts ?? []) {
       const override = prefs.overrides[account.id]
@@ -371,7 +371,7 @@ const cashBySource = computed(() => {
   return map
 })
 const cashOnHand = computed(() => cashRows.value.length ? [...cashBySource.value.values()].reduce((a, b) => a + b, 0) : null)
-const cashSources = computed(() => selectedIds.value.map(id => ({ id, name: plans.value.find(p => p.id === id)?.name ?? 'Budget' })))
+const cashSources = computed(() => selectedIds.value.map(id => ({ id, name: plans.value.find(p => p.id === id)?.name ?? 'Plan' })))
 
 function accountPrefs (sourceId: string) {
   const prefs = prefsByPlan.value[sourceId]
@@ -905,8 +905,8 @@ const confidencePill: Record<string, { label: string, tone: string }> = {
         :plans="plans"
         :selected="selectedIds"
         :label="label"
-        caption="Budgets shown"
-        note="Bills and goals combine across selected budgets."
+        caption="Plans shown"
+        note="Bills and goals combine across selected plans."
         @toggle="toggle"
       />
       <CashPicker
@@ -938,7 +938,7 @@ const confidencePill: Record<string, { label: string, tone: string }> = {
     <p v-if="loading" class="y-body state">Loading your month…</p>
     <section v-else-if="noPlans || connectError" class="y-banner state">
       <span class="y-dot idle" />
-      {{ connectError ? 'Something went wrong reaching your budgets.' : 'No budgets connected yet.' }}
+      {{ connectError ? 'Something went wrong reaching your plans.' : 'No plans connected yet.' }}
       <NuxtLink to="/account" class="b">Add a token or import an export</NuxtLink>
     </section>
 
@@ -1207,7 +1207,7 @@ const confidencePill: Record<string, { label: string, tone: string }> = {
           <div class="yearly-caption"><span>{{ g.funded }}</span><span>{{ g.target }}</span></div>
         </div>
       </div>
-      <div v-else class="rail-empty">No yearly goals in the selected budgets.</div>
+      <div v-else class="rail-empty">No yearly goals in the selected plans.</div>
       </div>
     </div>
 

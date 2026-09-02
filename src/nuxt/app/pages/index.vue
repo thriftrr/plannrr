@@ -25,13 +25,13 @@ const greeting = computed(() => {
 
 const planLabel = computed(() => {
   const n = stats.planCount.value
-  return n === 1 ? '1 budget' : `${n} budgets`
+  return n === 1 ? '1 plan' : `${n} plans`
 })
 
 const budgetLabel = computed(() => {
   const names = stats.planNames.value
   if (!names.length) return ''
-  return names.length === 1 ? names[0]! : `${names.length} budgets`
+  return names.length === 1 ? names[0]! : `${names.length} plans`
 })
 
 // Pills quote real figures, or nothing at all — never a placeholder number.
@@ -100,10 +100,10 @@ const setupSteps = computed(() => {
     {
       key: 'budget',
       done: connected,
-      title: 'Connect your budget',
+      title: 'Connect your plan',
       blurb: 'Three ways in — pick whichever fits how you use YNAB.',
       to: '/account#ynab-token',
-      cta: 'Connect a budget'
+      cta: 'Connect a plan'
     }
   ]
 })
@@ -144,21 +144,21 @@ const icon = {
       </template>
       <template v-else-if="serverStatus?.mock">
         <span class="y-dot" />
-        Sample data mode — serving built-in mock budgets.
+        Sample data mode — serving built-in mock plans.
         <NuxtLink to="/tinkrr" class="b">Open Tinkrr</NuxtLink>
       </template>
       <template v-else-if="stats.planCount.value">
         <span class="y-dot" />
         <span>
           Connected<template v-if="user"> as <b>{{ user.email }}</b></template>
-          <template v-if="budgetLabel"> · budget <b>{{ budgetLabel }}</b></template>
+          <template v-if="budgetLabel"> · plan <b>{{ budgetLabel }}</b></template>
           <template v-if="timeAgo(stats.lastSynced.value)"> · debts synced {{ timeAgo(stats.lastSynced.value) }}</template>
         </span>
         <NuxtLink to="/account" class="b">manage sources</NuxtLink>
       </template>
       <template v-else-if="user">
         <span class="y-dot idle" />
-        Signed in as <b>{{ user.email }}</b> — no budgets yet.
+        Signed in as <b>{{ user.email }}</b> — no plans yet.
         <NuxtLink to="/account" class="b">Import an export or add a token</NuxtLink>
       </template>
       <template v-else>

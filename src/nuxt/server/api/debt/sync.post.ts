@@ -8,7 +8,7 @@ export default defineEventHandler(async (event) => {
   const body = await readBody<{ planIds?: string[] }>(event)
   const planIds = (body?.planIds ?? []).filter(id => typeof id === 'string').slice(0, 50)
   if (!planIds.length) {
-    throw createError({ statusCode: 400, statusMessage: 'Pick at least one budget to sync from' })
+    throw createError({ statusCode: 400, statusMessage: 'Pick at least one plan to sync from' })
   }
 
   let created = 0

@@ -12,7 +12,7 @@ const UPDATED = 'September 2, 2026'
       <p class="y-tiny">Last updated {{ UPDATED }}</p>
 
       <p class="y-body">
-        Plannrr is a planning companion for YNAB. It exists to show you your own budget in new
+        Plannrr is a planning companion for YNAB. It exists to show you your own plan in new
         ways and to let you draft changes before you commit them. This page says exactly what it
         keeps, why, and how to make it forget you.
       </p>
@@ -22,7 +22,7 @@ const UPDATED = 'September 2, 2026'
         <li><b>Your email address</b> — to sign you in with a magic link and to reach you about your account. Nothing else is sent to it.</li>
         <li><b>Profile details you choose to add</b> — a name, a currency, a colour palette, an optional profile picture.</li>
         <li><b>YNAB access</b> — either a personal access token you paste, or the tokens YNAB issues when you choose “Sign in with YNAB”. These are stored encrypted (AES-256-GCM) with a key that lives outside the database, are only ever used on the server, and are never shown back to you or anyone else.</li>
-        <li><b>A copy of the budgets you pick</b> — categories, targets, months, scheduled transactions, a window of the register, and on-budget account balances — so pages load from Plannrr's own copy and YNAB is only contacted when you sync. Nothing you don't choose to import is read.</li>
+        <li><b>A copy of the plans you pick</b> — categories, targets, months, scheduled transactions, a window of the register, and on-budget account balances — so pages load from Plannrr's own copy and YNAB is only contacted when you sync. Nothing you don't choose to import is read.</li>
         <li><b>Things you create here</b> — what-if drafts, hand-tracked debts, calendar preferences, story cards, feedback you send.</li>
       </ul>
 
@@ -36,7 +36,7 @@ const UPDATED = 'September 2, 2026'
       <h2>Where it lives and for how long</h2>
       <p class="y-body">
         Plannrr runs on Cloudflare (Workers, D1, KV, R2). Your data stays there until you remove
-        a budget from your account page or delete your account. Sign-in links expire after fifteen
+        a plan from your account page or delete your account. Sign-in links expire after fifteen
         minutes and their hashes are pruned automatically. There are no analytics or advertising
         trackers.
       </p>
@@ -51,7 +51,7 @@ const UPDATED = 'September 2, 2026'
 
       <h2>Deleting your data</h2>
       <p class="y-body">
-        On your account page, “Delete my account” removes everything above — the budget copies,
+        On your account page, “Delete my account” removes everything above — the plan copies,
         tokens, debts, drafts, feedback, picture, and the account itself — immediately. If you would
         rather ask a person, email <a href="mailto:me@jonknoll.dev">me@jonknoll.dev</a> from the
         address on the account and it will be deleted within a few days. You can also revoke

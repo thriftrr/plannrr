@@ -168,7 +168,7 @@ function submitAdd () {
       </div>
 
       <div v-if="adding" class="add-form">
-        <select v-if="sources.length > 1" v-model="form.sourceId" aria-label="Budget">
+        <select v-if="sources.length > 1" v-model="form.sourceId" aria-label="Plan">
           <option v-for="s in sources" :key="s.id" :value="s.id">{{ s.name }}</option>
         </select>
         <input v-model="form.name" type="text" placeholder="Account name" aria-label="Account name" maxlength="80" @keyup.enter="submitAdd">

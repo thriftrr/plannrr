@@ -37,7 +37,7 @@ export default defineNuxtConfig({
     head: {
       htmlAttrs: { lang: 'en' },
       title: 'Plannrr',
-      meta: [{ name: 'description', content: 'A budget planning companion that plays nicely with YNAB.' }],
+      meta: [{ name: 'description', content: 'A planning companion that plays nicely with YNAB.' }],
       link: [
         // Brand mark (Brand.dc.html): SVG first, ICO fallback, 180px touch icon.
         { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' },

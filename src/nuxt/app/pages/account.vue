@@ -69,7 +69,7 @@ onMounted(async () => {
   const outcome = route.query.ynab
   if (typeof outcome === 'string') {
     if (outcome === 'connected') {
-      patMessage.value = 'Connected to YNAB — now pick which budgets to import.'
+      patMessage.value = 'Connected to YNAB — now pick which plans to import.'
       await openPicker()
     } else if (outcome === 'denied') {
       patMessage.value = 'No problem — nothing was connected.'
@@ -293,7 +293,7 @@ async function importChosen () {
     })
     picker.value.open = false
     const n = res.created + res.updated
-    sourceMessage.value = `Imported ${n} budget${n === 1 ? '' : 's'} from YNAB — pages now read your local copy.`
+    sourceMessage.value = `Imported ${n} plan${n === 1 ? '' : 's'} from YNAB — pages now read your local copy.`
     startCooldown(RESYNC_COOLDOWN_SECONDS)
     await Promise.all([loadSources(), loadLastSynced()])
   } catch (cause: unknown) {
@@ -317,7 +317,7 @@ async function createManualBudget () {
     await loadSources()
   } catch (cause: unknown) {
     const err = cause as { data?: { statusMessage?: string } }
-    newBudget.value.error = err.data?.statusMessage ?? 'Could not create the budget.'
+    newBudget.value.error = err.data?.statusMessage ?? 'Could not create the plan.'
     newBudget.value.busy = false
   }
 }
@@ -334,7 +334,7 @@ async function deleteSource (row: SourceRow) {
     await loadSources()
   } catch (cause: unknown) {
     const err = cause as { data?: { statusMessage?: string } }
-    sourceMessage.value = err.data?.statusMessage ?? 'Could not remove that budget.'
+    sourceMessage.value = err.data?.statusMessage ?? 'Could not remove that plan.'
   } finally {
     sourceBusy.value = false
   }
@@ -350,7 +350,7 @@ async function savePat () {
   try {
     await $fetch('/api/account/pat', { method: 'POST', body: { pat: pat.value } })
     pat.value = ''
-    patMessage.value = 'Token saved — now pick which budgets to import.'
+    patMessage.value = 'Token saved — now pick which plans to import.'
     await refresh()
     await openPicker()
   } catch (cause: unknown) {
@@ -366,7 +366,7 @@ async function removePat () {
   patMessage.value = ''
   try {
     await $fetch('/api/account/pat', { method: 'DELETE' })
-    patMessage.value = 'Disconnected from YNAB. Your imported budgets stay until you remove them.'
+    patMessage.value = 'Disconnected from YNAB. Your imported plans stay until you remove them.'
     await refresh()
   } finally {
     patBusy.value = false
@@ -451,7 +451,7 @@ async function signOut () {
               </label>
             </div>
             <p class="y-tiny fine">
-              Synced YNAB budgets use the currency YNAB reports for that plan. This setting
+              Synced YNAB plans use the currency YNAB reports for that plan. This setting
               covers hand-tracked debts and no-YNAB mode.
             </p>
 
@@ -519,7 +519,7 @@ async function signOut () {
         </div>
         <template v-if="user.ynabOauthAvailable">
           <p class="y-body">
-            Pulls your budgets live from YNAB. You'll approve Plannrr on YNAB's own page — no
+            Pulls your plans live from YNAB. You'll approve Plannrr on YNAB's own page — no
             token to copy, and you can revoke it there any time. Access is only ever used
             server-side and never shown to anyone.
           </p>
@@ -530,7 +530,7 @@ async function signOut () {
         </template>
         <template v-else>
           <p class="y-body">
-            Pulls your budgets live from YNAB. Create a personal access token under
+            Pulls your plans live from YNAB. Create a personal access token under
             <a href="https://app.ynab.com/settings/developer" target="_blank" rel="noopener">YNAB → Account Settings → Developer</a>.
             It's stored encrypted and only ever used server-side.
           </p>
@@ -549,12 +549,12 @@ async function signOut () {
         </template>
         <p v-if="patMessage" class="y-tiny note">{{ patMessage }}</p>
         <div v-if="picker.open" class="picker">
-          <div class="picker-head">Which budgets should Plannrr import?</div>
+          <div class="picker-head">Which plans should Plannrr import?</div>
           <p class="y-tiny picker-sub">
             Your copy lives in Plannrr — pages read it directly, and YNAB is only
             contacted again when you re-sync.
           </p>
-          <p v-if="picker.loading" class="y-tiny">Asking YNAB for your budget list…</p>
+          <p v-if="picker.loading" class="y-tiny">Asking YNAB for your plan list…</p>
           <template v-else>
             <label v-for="plan in picker.plans" :key="plan.id" class="picker-row">
               <input
@@ -568,7 +568,7 @@ async function signOut () {
             </label>
             <div class="row picker-actions">
               <button class="y-btn" :disabled="picker.busy || !picker.chosen.length" @click="importChosen">
-                {{ picker.busy ? 'Importing…' : `Import ${picker.chosen.length} budget${picker.chosen.length === 1 ? '' : 's'}` }}
+                {{ picker.busy ? 'Importing…' : `Import ${picker.chosen.length} plan${picker.chosen.length === 1 ? '' : 's'}` }}
               </button>
               <button class="y-btn-link" :disabled="picker.busy" @click="picker.open = false">Not now</button>
             </div>
@@ -579,7 +579,7 @@ async function signOut () {
           <button class="y-btn-outline" :disabled="resyncBusy || cooldown > 0" @click="resyncNow">
             {{ resyncBusy ? 'Syncing…' : '⟳ Re-sync from YNAB' }}
           </button>
-          <button class="y-btn-secondary" :disabled="picker.busy" @click="openPicker">Choose budgets…</button>
+          <button class="y-btn-secondary" :disabled="picker.busy" @click="openPicker">Choose plans…</button>
           <span class="y-tiny" role="status">{{ resyncStatus }}</span>
         </div>
         <p class="y-tiny note">
@@ -589,11 +589,11 @@ async function signOut () {
 
       <section id="sources" class="y-card">
         <div class="head-row">
-          <div class="y-card-title">Budget sources</div>
-          <button class="y-btn-dashed new-budget" @click="newBudget.open = !newBudget.open">+ New budget</button>
+          <div class="y-card-title">Plan sources</div>
+          <button class="y-btn-dashed new-budget" @click="newBudget.open = !newBudget.open">+ New plan</button>
         </div>
         <p class="y-body">
-          Everything Plannrr reads lives here — budgets synced from YNAB, imported
+          Everything Plannrr reads lives here — plans synced from YNAB, imported
           from an export zip, or built by hand. No YNAB required.
         </p>
 
@@ -603,8 +603,8 @@ async function signOut () {
             class="y-input grow"
             type="text"
             maxlength="80"
-            placeholder="Budget name (🌱 Fresh Start)"
-            aria-label="New budget name"
+            placeholder="Plan name (🌱 Fresh Start)"
+            aria-label="New plan name"
             @keyup.enter="createManualBudget"
           >
           <select v-model="newBudget.currency" class="y-input cur-select" aria-label="Currency">
@@ -627,7 +627,7 @@ async function signOut () {
             </span>
             <template v-if="confirmingId === row.id">
               <span class="y-tiny confirm-note">
-                Removes this budget from Plannrr{{ row.debtCount ? ` and its ${row.debtCount} synced debt${row.debtCount === 1 ? '' : 's'}` : '' }} — nothing changes in YNAB. Sure?
+                Removes this plan from Plannrr{{ row.debtCount ? ` and its ${row.debtCount} synced debt${row.debtCount === 1 ? '' : 's'}` : '' }} — nothing changes in YNAB. Sure?
               </span>
               <button class="y-btn-danger" :disabled="sourceBusy" @click="deleteSource(row)">
                 {{ sourceBusy ? 'Removing…' : 'Yes, remove' }}
@@ -638,8 +638,8 @@ async function signOut () {
           </div>
         </div>
         <p v-else class="y-body empty-sources">
-          No budget sources yet — import from YNAB above, upload an export zip
-          below, or create a budget by hand.
+          No plan sources yet — import from YNAB above, upload an export zip
+          below, or create a plan by hand.
         </p>
         <p v-if="sourceMessage" class="y-tiny note" role="status">{{ sourceMessage }}</p>
 
@@ -663,7 +663,7 @@ async function signOut () {
       <section id="delete" class="y-card danger-card">
         <div class="y-card-title">Delete my account</div>
         <p class="y-body">
-          Removes everything Plannrr holds for you — imported budgets, YNAB access, debts, drafts,
+          Removes everything Plannrr holds for you — imported plans, YNAB access, debts, drafts,
           story, feedback, and your picture — immediately and for good. Nothing changes in YNAB.
           See the <NuxtLink to="/privacy">privacy policy</NuxtLink> for what that covers.
         </p>

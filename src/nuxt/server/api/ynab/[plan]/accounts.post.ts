@@ -16,7 +16,7 @@ export default defineEventHandler(async (event) => {
   const owner = await requireDebtOwner(event)
   const source = await getPlanSource(owner, planId)
   if (!source || source.kind !== 'synced' || !source.ynabPlanId) {
-    throw createError({ statusCode: 400, statusMessage: 'Only budgets synced from YNAB have live account balances' })
+    throw createError({ statusCode: 400, statusMessage: 'Only plans synced from YNAB have live account balances' })
   }
   const pat = await resolvePat(event)
   if (!pat) throw createError({ statusCode: 400, statusMessage: 'Save a YNAB token first' })

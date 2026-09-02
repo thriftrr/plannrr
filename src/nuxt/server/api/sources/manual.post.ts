@@ -6,7 +6,7 @@ export default defineEventHandler(async (event) => {
 
   const name = body?.name?.trim()
   if (!name || name.length > 80) {
-    throw createError({ statusCode: 400, statusMessage: 'Give the budget a name (up to 80 characters)' })
+    throw createError({ statusCode: 400, statusMessage: 'Give the plan a name (up to 80 characters)' })
   }
   const currency = String(body?.currency ?? 'USD')
   if (!CURRENCY_CODES.includes(currency)) {

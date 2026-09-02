@@ -45,8 +45,8 @@ export function usePlanSelection () {
 
   const label = computed(() => {
     const sel = selectedPlans.value
-    if (!sel.length) return 'No budgets'
-    return sel.length === 1 ? sel[0]!.name : `${sel.length} budgets`
+    if (!sel.length) return 'No plans'
+    return sel.length === 1 ? sel[0]!.name : `${sel.length} plans`
   })
 
   return { plans, selectedIds, selectedPlans, loaded, patError, label, load, toggle }

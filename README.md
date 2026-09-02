@@ -1,10 +1,10 @@
 # Plannrr
 
-Plannrr is a budget planning companion that plays nicely with [YNAB](https://www.ynab.com/): pull your plan down, see it clearly, play out "what if" scenarios, and sync the result back — plus a calendar view of bills and date-anchored goals.
+Plannrr is a planning companion that plays nicely with [YNAB](https://www.ynab.com/): pull your plan down, see it clearly, play out "what if" scenarios, and sync the result back — plus a calendar view of bills and date-anchored goals.
 
 ## The two big ideas
 
-### 1. Budget sandbox — plan, tinker, sync back
+### 1. Plan sandbox — plan, tinker, sync back
 
 See financing and spending realistically, then draft changes without touching the real plan until you're ready.
 
@@ -17,7 +17,7 @@ Driving scenario: live off one paycheck, send the second paycheck straight to de
 
 ### 2. Calendar view — bills, goals, and progress
 
-View the budget on a calendar: "rent hits on the 2nd", "$500 saved by Thanksgiving".
+View the plan on a calendar: "rent hits on the 2nd", "$500 saved by Thanksgiving".
 
 - Scheduled transactions (bills) plotted on their next dates, expanded by frequency
 - Category goals with target dates shown on the calendar
@@ -44,7 +44,7 @@ Sign-in is passwordless: enter an email, get a magic link (15-minute,
 single-use; only SHA-256 digests of tokens are stored). Sessions are JWTs in
 an httpOnly cookie. In dev, magic-link emails print to the server console.
 
-A signed-in user can connect budgets two ways:
+A signed-in user can connect plans two ways:
 
 1. **Import a YNAB export zip** (YNAB → Export Plan Data). Both the newer
    "- Plan.csv" and older "- Budget.csv" formats parse; monthly income is
@@ -145,3 +145,7 @@ Reference: https://api.ynab.com/ (base `https://api.ynab.com/v1`, bearer token a
   - `PATCH /plans/:id/categories/:category_id` — update a category, including `goal_target` and `goal_target_date`
   - `POST` / `PUT` `/plans/:id/scheduled_transactions` — manage bills
 - Rate limit is 200 requests/hour per token — cache responses and use delta requests (`last_knowledge_of_server`) when syncing
+
+## License
+
+MIT — see [LICENSE](LICENSE). Take it, run it, change it, ship it. The YNAB name and marks belong to YNAB; the affiliation disclaimer in the footer must stay if you talk to their API.

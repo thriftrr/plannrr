@@ -144,7 +144,7 @@ async function createBudget () {
     if (!sel.selectedIds.value.includes(res.id)) sel.toggle(res.id)
   } catch (cause: unknown) {
     const err = cause as { data?: { statusMessage?: string } }
-    newBudget.value.error = err.data?.statusMessage ?? 'Could not create the budget.'
+    newBudget.value.error = err.data?.statusMessage ?? 'Could not create the plan.'
     newBudget.value.busy = false
   }
 }
@@ -322,7 +322,7 @@ const sections = computed<PlanSection[]>(() => {
     }
     return {
       planId,
-      planName: sel.plans.value.find(item => item.id === planId)?.name ?? 'Budget',
+      planName: sel.plans.value.find(item => item.id === planId)?.name ?? 'Plan',
       detail,
       groups
     }
@@ -906,7 +906,7 @@ const pushable = (planId: string) => isMock.value || sourceKinds.value[planId] =
 const naturalHome = computed(() => {
   const map = new Map<string, { planId: string, planName: string, groupId: string, groupName: string }>()
   for (const id of sel.selectedIds.value) {
-    const planName = sel.plans.value.find(item => item.id === id)?.name ?? 'Budget'
+    const planName = sel.plans.value.find(item => item.id === id)?.name ?? 'Plan'
     for (const category of detailsByPlan.value[id]?.categories ?? []) {
       map.set(category.id, {
         planId: id,
@@ -1219,16 +1219,16 @@ const syncDerivation = computed(() => {
   const notes: string[] = []
   if (incomeDelta.value !== 0) notes.push(`your what-if income (${fmt(income.value)}) stays local — YNAB has no equivalent`)
   if (trashedReal) notes.push(`${trashedReal} trashed ${trashedReal === 1 ? 'row' : 'rows'} stay local — YNAB's API can't hide categories`)
-  if (crossBudget) notes.push(`${crossBudget} cross-budget ${crossBudget === 1 ? 'move' : 'moves'}: YNAB can't move a category between budgets, so it's created in the new budget and its target removed in the old one — hide the leftover there by hand`)
+  if (crossBudget) notes.push(`${crossBudget} cross-plan ${crossBudget === 1 ? 'move' : 'moves'}: YNAB can't move a category between plans, so it's created in the new plan and its target removed in the old one — hide the leftover there by hand`)
   if (unnamedCustom) notes.push(`${unnamedCustom} unnamed what-if ${unnamedCustom === 1 ? 'row' : 'rows'}`)
   const linkable: Array<{ planId: string, name: string, count: number }> = []
   for (const [planId, count] of blockedSources) {
-    const name = sel.plans.value.find(item => item.id === planId)?.name ?? 'This budget'
+    const name = sel.plans.value.find(item => item.id === planId)?.name ?? 'This plan'
     if (sourceKinds.value[planId] === 'manual') {
       // Manual budgets aren't dead ends — they can be linked and pushed.
       linkable.push({ planId, name, count })
     } else {
-      notes.push(`“${name}” can't push — not a YNAB budget (${count} ${count === 1 ? 'change stays' : 'changes stay'} local)`)
+      notes.push(`“${name}” can't push — not a YNAB plan (${count} ${count === 1 ? 'change stays' : 'changes stay'} local)`)
     }
   }
   return { actions, notes, linkable }
@@ -1292,7 +1292,7 @@ async function linkManualSource (planId: string) {
     await loadLinkTargets()
   } catch (cause: unknown) {
     const err = cause as { data?: { statusMessage?: string } }
-    linkError.value = err.data?.statusMessage ?? 'Could not link that budget.'
+    linkError.value = err.data?.statusMessage ?? 'Could not link that plan.'
   } finally {
     linkBusy.value = null
   }
@@ -1771,7 +1771,7 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
           :selected="sel.selectedIds.value"
           :label="sel.label.value"
           caption="Tinker with"
-          note="Income and goals add up across selected budgets."
+          note="Income and goals add up across selected plans."
           @toggle="sel.toggle"
         />
         <div v-if="hasAnyDetail" class="hero" :class="{ neg: remaining < 0 }">
@@ -1797,8 +1797,8 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
           <b>How Tinkrr works.</b> Every category with a goal shows up with what YNAB plans
           for it per month. Type a <b>New goal</b> (or a new Income) to see what your plan
           costs against what you expect to earn — the <b>Difference</b> column keeps score.
-          Untick rows to leave them out, trash rows to drop them from the budget, drag the
-          ⠿ handle to move a category into another group — or another budget. Fields do math
+          Untick rows to leave them out, trash rows to drop them from the plan, drag the
+          ⠿ handle to move a category into another group — or another plan. Fields do math
           like YNAB's: <code>1200/12</code>, <code>+200</code>. <b>Nothing is written to
           YNAB</b> until you sync — drafts live in this browser only.
         </div>
@@ -1806,7 +1806,7 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
       </section>
 
       <section v-if="connectError || noSources" class="y-card empty-state">
-        <h2>{{ connectError ? 'Something went wrong' : 'No budgets connected yet' }}</h2>
+        <h2>{{ connectError ? 'Something went wrong' : 'No plans connected yet' }}</h2>
         <p v-if="!authUser" class="y-body">
           <NuxtLink to="/login">Sign in</NuxtLink> to import a YNAB export or connect your
           own access token — or run the app in mock mode to play with sample data.
@@ -1817,12 +1817,12 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
         </p>
       </section>
 
-      <p v-else-if="loading && !hasAnyDetail" class="y-body loading-note">Loading budgets…</p>
+      <p v-else-if="loading && !hasAnyDetail" class="y-body loading-note">Loading plans…</p>
 
       <template v-else>
         <div v-if="sel.patError.value" class="y-banner warn-banner">
           <span class="y-dot idle" />
-          Your saved YNAB token stopped working — live budgets are hidden.
+          Your saved YNAB token stopped working — live plans are hidden.
           <NuxtLink to="/account" class="b">Update it in your account</NuxtLink>
         </div>
 
@@ -1840,9 +1840,9 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
 
         <!-- Trash view -->
         <section v-if="chip === 'Trash'" class="card">
-          <div class="trash-title">Trash — removed from the budget, not counted anywhere</div>
+          <div class="trash-title">Trash — removed from the plan, not counted anywhere</div>
           <div v-if="!trashRows.length" class="trash-empty">
-            Trash is empty. The small trash icon on any row removes it from its budget and parks it here.
+            Trash is empty. The small trash icon on any row removes it from its plan and parks it here.
           </div>
           <div v-for="t in trashRows" :key="t.id" class="trash-row">
             <div class="trash-info">
@@ -1944,7 +1944,7 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
                       <span
                         class="drag"
                         draggable="true"
-                        title="Drag to another group or budget"
+                        title="Drag to another group or plan"
                         @dragstart="onDragStart(category, $event)"
                         @dragend="onDragEnd"
                       >⠿</span>
@@ -2037,7 +2037,7 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
                       >↺</button>
                       <button
                         class="mini-act trash-act"
-                        title="Remove from this budget (goes to Trash)"
+                        title="Remove from this plan (goes to Trash)"
                         @click="trashRow(section, group, category)"
                       >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18" /><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>
@@ -2122,15 +2122,15 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
           </template>
 
           <div v-if="!isMock && !forceOpen" class="add-budget-row">
-            <button v-if="!newBudget.open" class="add-group" @click="newBudget.open = true">+ New budget</button>
+            <button v-if="!newBudget.open" class="add-group" @click="newBudget.open = true">+ New plan</button>
             <template v-else>
               <input
                 v-model="newBudget.name"
                 type="text"
                 class="add-budget-name"
                 maxlength="80"
-                placeholder="Budget name (🌱 Fresh Start)"
-                aria-label="New budget name"
+                placeholder="Plan name (🌱 Fresh Start)"
+                aria-label="New plan name"
                 @keyup.enter="createBudget"
                 @keyup.escape="newBudget.open = false"
               >
@@ -2146,7 +2146,7 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
           </div>
 
           <p v-if="!loading && hasAnyDetail && !visibleCategories.length" class="table-note">
-            No categories in the selected budgets this month.
+            No categories in the selected plans this month.
           </p>
           <p v-else-if="!anyMatch && (filterActive || chip !== 'All')" class="table-note">
             <template v-if="filterActive">No categories match “{{ filter.trim() }}”.</template>
@@ -2201,7 +2201,7 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
                 :key="a.aid"
                 class="sync-row"
                 :class="{ off: !effectiveOn(a), locked: a.blocked }"
-                :title="a.blocked ? 'This budget isn\u2019t linked to YNAB yet — link or merge it below to push' : undefined"
+                :title="a.blocked ? 'This plan isn\u2019t linked to YNAB yet — link or merge it below to push' : undefined"
               >
                 <input
                   type="checkbox"
@@ -2221,19 +2221,19 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
           <div v-if="canPush && syncLinkable.length" class="sync-link">
             <div v-for="row in syncLinkable" :key="row.planId" class="sync-link-row">
               <div class="sync-link-copy">
-                <b>“{{ row.name }}”</b> is a hand-built budget with
+                <b>“{{ row.name }}”</b> is a hand-built plan with
                 {{ row.count }} {{ row.count === 1 ? 'change' : 'changes' }} —
-                link it to an empty YNAB budget, or merge it into a synced one —
+                link it to an empty YNAB plan, or merge it into a synced one —
                 either way this review will push the changes in. Merging moves its
                 groups and rows and removes the empty shell.
               </div>
               <template v-if="linkTargets.length || mergeTargets.length">
-                <select v-model="linkChoice[row.planId]" class="sync-link-select" aria-label="Destination for this budget">
+                <select v-model="linkChoice[row.planId]" class="sync-link-select" aria-label="Destination for this plan">
                   <option value="" disabled>Pick a destination…</option>
-                  <optgroup v-if="linkTargets.length" label="Link to an empty YNAB budget">
+                  <optgroup v-if="linkTargets.length" label="Link to an empty YNAB plan">
                     <option v-for="plan in linkTargets" :key="plan.id" :value="`link:${plan.id}`">{{ plan.name }}</option>
                   </optgroup>
-                  <optgroup v-if="mergeTargets.length" label="Merge into a synced budget">
+                  <optgroup v-if="mergeTargets.length" label="Merge into a synced plan">
                     <option v-for="plan in mergeTargets" :key="plan.id" :value="`merge:${plan.id}`">{{ plan.name }}</option>
                   </optgroup>
                 </select>
@@ -2244,14 +2244,14 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
                 >{{ linkBusy === row.planId ? 'Working…' : linkChoice[row.planId]?.startsWith('merge:') ? 'Merge' : 'Link' }}</button>
               </template>
               <span v-else class="sync-link-none">
-                No destination yet — YNAB's API can't create budgets, so make an
+                No destination yet — YNAB's API can't create plans, so make an
                 empty one over there, then check again here.
               </span>
               <a class="sync-link-ynab" href="https://app.ynab.com" target="_blank" rel="noopener">Open YNAB ↗</a>
               <button
                 class="y-btn-secondary sync-link-refresh"
                 :disabled="linkRefreshing"
-                title="Re-check YNAB for new budgets"
+                title="Re-check YNAB for new plans"
                 @click="refreshLinkTargets"
               >{{ linkRefreshing ? 'Checking…' : '↻ Check again' }}</button>
             </div>

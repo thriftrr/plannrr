@@ -89,7 +89,7 @@ export function magicLinkEmail (input: MagicLinkEmailInput): EmailTemplate {
       <tr><td style="background-color:#ffffff; border-left:1px solid #e5dfd3; border-right:1px solid #e5dfd3; padding:30px 32px 8px;">
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
           <tr><td style="font-family:${FONT}; font-size:14px; color:#4a463c; mso-line-height-rule:exactly; line-height:22px;">
-            ${askedLine} Tap the button and you're in &mdash; your budgets, the Tinkrr sandbox, and your debt burn-down will be right where you left them.
+            ${askedLine} Tap the button and you're in &mdash; your plans, the Tinkrr sandbox, and your debt burn-down will be right where you left them.
           </td></tr>
           <tr><td align="center" style="padding:26px 0 10px;">
             <table role="presentation" cellpadding="0" cellspacing="0" border="0">

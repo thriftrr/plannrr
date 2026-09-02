@@ -38,5 +38,6 @@
     "@types/markdown-it": "^14.2.0",
     "typescript": "^5.9.3",
     "wrangler": "^4.127.1"
-  }
+  },
+  "license": "MIT"
 }

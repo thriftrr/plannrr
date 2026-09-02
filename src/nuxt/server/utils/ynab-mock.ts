@@ -170,7 +170,7 @@ const mockDb: Record<string, MockPlanData> = {
   'mock-plan-1': {
     plan: {
       id: 'mock-plan-1',
-      name: 'Mock Family Budget',
+      name: 'Mock Family Plan',
       last_modified_on: '2026-08-28T12:00:00Z',
       currency_format: { iso_code: 'USD', currency_symbol: '$' }
     },
@@ -186,7 +186,7 @@ const mockDb: Record<string, MockPlanData> = {
   'mock-plan-2': {
     plan: {
       id: 'mock-plan-2',
-      name: 'Mock Partner Budget',
+      name: 'Mock Partner Plan',
       last_modified_on: '2026-08-27T09:00:00Z',
       currency_format: { iso_code: 'USD', currency_symbol: '$' }
     },
@@ -218,7 +218,7 @@ const mockDb: Record<string, MockPlanData> = {
   'mock-plan-4': {
     plan: {
       id: 'mock-plan-4',
-      name: 'Mock 2019 Budget (Archived)',
+      name: 'Mock 2019 Plan (Archived)',
       last_modified_on: '2026-01-05T10:00:00Z',
       currency_format: { iso_code: 'USD', currency_symbol: '$' }
     },
@@ -289,15 +289,15 @@ export function resolveMockDebtRecords () {
     ...extra
   })
   return [
-    record('mock-debt-1', 'ynab', 'Mock Family Budget', '🏦 SoFi Loan', {
+    record('mock-debt-1', 'ynab', 'Mock Family Plan', '🏦 SoFi Loan', {
       startDate: '2025-08-20', startBalance: -30_000_000, balance: sofi[sofi.length - 1]!.balance,
       paidIn: 1_090_000 * 12, history: sofi, rate: 8.49, minimumPayment: 1_364_580
     }),
-    record('mock-debt-2', 'ynab', 'Mock Family Budget', '🚐 RV Loan', {
+    record('mock-debt-2', 'ynab', 'Mock Family Plan', '🚐 RV Loan', {
       startDate: '2024-06-15', startBalance: -19_591_080, balance: rv[rv.length - 1]!.balance,
       paidIn: 105_000 * 26, history: rv
     }),
-    record('mock-debt-3', 'ynab', 'Mock Partner Budget', '🛻 Truck Loan', {
+    record('mock-debt-3', 'ynab', 'Mock Partner Plan', '🛻 Truck Loan', {
       startDate: '2025-03-03', startBalance: -11_000_000, balance: truck[truck.length - 1]!.balance,
       paidIn: 250_000 * 17, history: truck
     }),
@@ -334,7 +334,7 @@ function mockTransactions (): { transactions: BudgetTransaction[], balance_now: 
     push(day(m, 21), '🎵 Spotify', -11_990, 'Subscriptions')                                           // gold
     push(day(m, 12 + Math.max(-2, Math.min(2, noise(2)))), '⚡ City Power & Light', -(98_000 + noise(18) * 1000), 'Electric') // payee+day, amount drifts
     push(day(m, 3), '💼 Acme Payroll', 2_800_000, 'Inflow: Ready to Assign')
-    push(day(m, 15), 'Transfer : 🚐 RV Loan', -204_290, null, true)          // one-sided: leaves the budget                                     // income, twice a month
+    push(day(m, 15), 'Transfer : 🚐 RV Loan', -204_290, null, true)          // one-sided: leaves the plan                                     // income, twice a month
     push(day(m, 18), '💼 Acme Payroll', 2_800_000, 'Inflow: Ready to Assign')
     // groceries: several a month, drifting day and amount — a suggestion, not a certainty
     const trips = 5 + (noise(1) + 1)

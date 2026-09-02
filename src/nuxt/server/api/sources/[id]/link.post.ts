@@ -11,13 +11,13 @@ export default defineEventHandler(async (event) => {
   const source = await getPlanSource(owner, id)
   if (!source) throw createError({ statusCode: 404, statusMessage: 'Budget source not found' })
   if (source.kind !== 'manual') {
-    throw createError({ statusCode: 400, statusMessage: 'Only hand-built budgets can be linked to YNAB' })
+    throw createError({ statusCode: 400, statusMessage: 'Only hand-built plans can be linked to YNAB' })
   }
 
   const body = await readBody<{ ynabPlanId?: string }>(event)
   const ynabPlanId = typeof body?.ynabPlanId === 'string' ? body.ynabPlanId : ''
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ynabPlanId)) {
-    throw createError({ statusCode: 400, statusMessage: 'Pick a YNAB budget to link to' })
+    throw createError({ statusCode: 400, statusMessage: 'Pick a YNAB plan to link to' })
   }
 
   const pat = await resolvePat(event)
@@ -30,11 +30,11 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 502, statusMessage: 'YNAB rejected the token — check it under YNAB → Account Settings → Developer' })
   }
   const plan = plans.find(p => p.id === ynabPlanId)
-  if (!plan) throw createError({ statusCode: 400, statusMessage: 'That budget is not visible to your token' })
+  if (!plan) throw createError({ statusCode: 400, statusMessage: 'That plan is not visible to your token' })
 
   const taken = await findSourceByYnabPlan(owner, ynabPlanId)
   if (taken) {
-    throw createError({ statusCode: 409, statusMessage: `“${taken.name}” already syncs from that YNAB budget` })
+    throw createError({ statusCode: 409, statusMessage: `“${taken.name}” already syncs from that YNAB plan` })
   }
 
   // The local snapshot keeps serving until the first push finalizes and

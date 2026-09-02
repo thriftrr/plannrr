@@ -108,7 +108,7 @@ export default defineEventHandler(async (event) => {
   const sourceId = typeof body?.sourceId === 'string' ? body.sourceId : ''
   const source = await getPlanSource(owner, sourceId)
   if (!source || source.kind !== 'synced' || !source.ynabPlanId) {
-    throw createError({ statusCode: 400, statusMessage: 'Only budgets synced from YNAB can push back' })
+    throw createError({ statusCode: 400, statusMessage: 'Only plans synced from YNAB can push back' })
   }
   const pat = await resolvePat(event)
   if (!pat) throw createError({ statusCode: 400, statusMessage: 'Save a YNAB token first' })
@@ -121,7 +121,7 @@ export default defineEventHandler(async (event) => {
     switch (action?.kind) {
       case 'update': {
         const month = MONTH_RE.test(body?.month ?? '') ? body!.month : null
-        if (!month) throw createError({ statusCode: 400, statusMessage: 'A month is required for budget updates' })
+        if (!month) throw createError({ statusCode: 400, statusMessage: 'A month is required for plan updates' })
         const categoryId = cleanUuid(action.categoryId, 'category')
         await ynabApi(pat, `/plans/${plan}/months/${month}/categories/${categoryId}`, {
           method: 'PATCH',

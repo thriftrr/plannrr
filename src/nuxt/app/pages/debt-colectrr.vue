@@ -156,7 +156,7 @@ watch(extras, (value) => {
 function togglePlan (id: string) {
   const current = selectedPlanIds.value
   if (current.includes(id)) {
-    if (current.length === 1) return // the picker locks the last budget
+    if (current.length === 1) return // the picker locks the last plan
     selectedPlanIds.value = current.filter(item => item !== id)
   } else {
     selectedPlanIds.value = syncPlans.value.map(plan => plan.id).filter(pid => current.includes(pid) || pid === id)
@@ -187,8 +187,8 @@ async function syncNow () {
 
 const syncPickerLabel = computed(() => {
   const chosen = syncPlans.value.filter(plan => selectedPlanIds.value.includes(plan.id))
-  if (!chosen.length) return 'No budgets'
-  return chosen.length === 1 ? chosen[0]!.name : `${chosen.length} budgets`
+  if (!chosen.length) return 'No plans'
+  return chosen.length === 1 ? chosen[0]!.name : `${chosen.length} plans`
 })
 
 // ---- Import / export -------------------------------------------------------
@@ -1107,7 +1107,7 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
           :selected="selectedPlanIds"
           :label="syncPickerLabel"
           caption="Sync from"
-          note="Loan accounts from every selected budget are pulled in."
+          note="Loan accounts from every selected plan are pulled in."
           @toggle="togglePlan"
         />
         <button class="primary" :disabled="syncing || !selectedPlanIds.length" @click="syncNow">
@@ -1133,7 +1133,7 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
         import an export on your account page and <em>Sync now</em> pulls them in.
       </p>
       <p v-else-if="syncPlans.length">
-        Hit <em>Sync now</em> above to pull loans from your budgets, or add one by
+        Hit <em>Sync now</em> above to pull loans from your plans, or add one by
         hand below — paid-off debts welcome too.
       </p>
       <p v-else>
