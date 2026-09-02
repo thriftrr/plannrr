@@ -527,25 +527,6 @@ async function signOut () {
             <a class="y-btn oauth-btn" href="/api/ynab/oauth/start">{{ user.ynabAuth === 'oauth' ? 'Reconnect with YNAB' : 'Sign in with YNAB' }}</a>
             <button v-if="user.hasPat" class="y-btn-secondary" type="button" :disabled="patBusy" @click="removePat">Disconnect</button>
           </div>
-          <details class="pat-details">
-            <summary>Use a personal access token instead</summary>
-            <p class="y-tiny">
-              For your own self-hosted copy. Create one under
-              <a href="https://app.ynab.com/settings/developer" target="_blank" rel="noopener">YNAB → Account Settings → Developer</a>
-              — YNAB asks that tokens stay with their owner, so only paste yours into an instance you run.
-            </p>
-            <form class="row" @submit.prevent="savePat">
-              <input
-                v-model="pat"
-                class="y-input grow"
-                type="password"
-                :placeholder="user.ynabAuth === 'pat' ? 'Replace saved token…' : 'Paste your token…'"
-                aria-label="YNAB personal access token"
-                autocomplete="off"
-              >
-              <button class="y-btn" type="submit" :disabled="patBusy || !pat.trim()">Save</button>
-            </form>
-          </details>
         </template>
         <template v-else>
           <p class="y-body">
@@ -903,9 +884,5 @@ h1 { font-size: 26px; }
   .grid { grid-template-columns: 1fr; }
 }
 .oauth-btn { text-decoration: none; display: inline-flex; align-items: center; }
-.pat-details { margin-top: 12px; }
-.pat-details summary { cursor: pointer; font-size: 12.5px; font-weight: 700; color: var(--fg-subtle); }
-.pat-details summary:hover { color: var(--teal-dark); }
-.pat-details p { margin: 8px 0; }
 .danger-card { border-color: var(--danger-bg); }
 </style>

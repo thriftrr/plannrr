@@ -57,8 +57,9 @@ A signed-in user can connect budgets two ways:
    created under YNAB → Account Settings → Developer, with redirect URI
    `<NUXT_APP_ORIGIN>/api/ynab/oauth/callback`. New OAuth apps are capped at
    25 users until YNAB reviews them.
-3. **Paste a personal access token** — for your own self-hosted copy. YNAB's
-   terms keep tokens with their owner, so a public instance should offer OAuth.
+3. **Paste a personal access token** — for your own self-hosted copy only.
+   YNAB's terms keep tokens with their owner, so the token field disappears
+   (and the endpoint refuses) as soon as OAuth is configured.
 
 `NUXT_YNAB_PERSONAL_ACCESS_TOKEN` in `.env` still works as a personal
 single-user mode (no sign-in needed), and `make up-mock` remains the
