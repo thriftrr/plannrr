@@ -347,15 +347,18 @@ const planNameByCategory = computed(() => {
 })
 
 // ---- Scenario math --------------------------------------------------------
-const draftFor = (category: Category) => drafts.value[category.id] ?? goalMonthly(category)
-const deltaFor = (category: Category) => draftFor(category) - goalMonthly(category)
+// New goal = the drafted target's monthly cost; Goal = what YNAB has today.
+// Difference is the gap between the two — the only thing the page is about.
+const draftFor = (category: Category) => goalMonthly(category)
+const deltaFor = (category: Category) => draftFor(category) - rawGoalMonthly(category)
 const isOff = (category: Category) => Boolean(disabled.value[category.id])
 const effectiveMonthly = (category: Category) => isOff(category) ? 0 : draftFor(category)
-const effectiveDelta = (category: Category) => effectiveMonthly(category) - goalMonthly(category)
+const effectiveDelta = (category: Category) => effectiveMonthly(category) - rawGoalMonthly(category)
+// Edited = the new goal differs from YNAB's, in amount or in shape.
+const isEdited = (category: Category) =>
+  !isOff(category) && (deltaFor(category) !== 0 || (Boolean(targetDraftFor(category)) && targetDiffers(category)))
 
-const changes = computed(() =>
-  visibleCategories.value.filter(category => !isOff(category) && deltaFor(category) !== 0)
-)
+const changes = computed(() => visibleCategories.value.filter(isEdited))
 const excluded = computed(() => visibleCategories.value.filter(category => isOff(category)))
 
 const totalDelta = computed(() =>
@@ -369,14 +372,11 @@ const income = computed(() => drafts.value[INCOME_KEY] ?? incomeLive.value)
 const incomeDelta = computed(() => income.value - incomeLive.value)
 
 const scenarioActive = computed(() =>
-  totalDelta.value !== 0 || incomeDelta.value !== 0 || excluded.value.length > 0 || targetChanges.value.length > 0
-)
-const targetChanges = computed(() =>
-  visibleCategories.value.filter(category => targetDraftFor(category) && targetDiffers(category))
+  changes.value.length > 0 || incomeDelta.value !== 0 || excluded.value.length > 0
 )
 
 const changeCount = computed(() =>
-  changes.value.length + excluded.value.length + targetChanges.value.length + (incomeDelta.value !== 0 ? 1 : 0)
+  changes.value.length + excluded.value.length + (incomeDelta.value !== 0 ? 1 : 0)
 )
 
 const goalCount = computed(() => visibleCategories.value.filter(category => !isCustom(category)).length)
@@ -385,7 +385,7 @@ const includedCount = computed(() =>
 )
 
 const requiredBase = computed(() =>
-  visibleCategories.value.reduce((sum, category) => sum + goalMonthly(category), 0)
+  visibleCategories.value.reduce((sum, category) => sum + rawGoalMonthly(category), 0)
 )
 const requiredTotal = computed(() => requiredBase.value + totalDelta.value)
 const remainingBase = computed(() => incomeLive.value - requiredBase.value)
@@ -394,7 +394,7 @@ const remaining = computed(() => income.value - requiredTotal.value)
 const groupMonthly = (group: DisplayGroup) => group.categories.reduce((sum, c) => sum + effectiveMonthly(c), 0)
 const groupDelta = (group: DisplayGroup) => group.categories.reduce((sum, c) => sum + effectiveDelta(c), 0)
 // Goal rollups are the stable baseline — edits and exclusions never move them.
-const groupGoal = (group: DisplayGroup) => group.categories.reduce((sum, c) => sum + goalMonthly(c), 0)
+const groupGoal = (group: DisplayGroup) => group.categories.reduce((sum, c) => sum + rawGoalMonthly(c), 0)
 const sectionGoal = (section: PlanSection) => section.groups.reduce((sum, g) => sum + groupGoal(g), 0)
 const sectionMonthly = (section: PlanSection) => section.groups.reduce((sum, g) => sum + groupMonthly(g), 0)
 const sectionDelta = (section: PlanSection) => section.groups.reduce((sum, g) => sum + groupDelta(g), 0)
@@ -419,7 +419,7 @@ const matchesFilter = (category: Category) =>
   (category.category_group_name ?? '').toLowerCase().includes(filterNeedle.value)
 
 const chipMatch = (category: Category) => {
-  if (chip.value === 'Edited') return !isOff(category) && deltaFor(category) !== 0
+  if (chip.value === 'Edited') return isEdited(category)
   if (chip.value === 'Excluded') return isOff(category)
   return true
 }
@@ -471,7 +471,7 @@ const toggleGroupOpen = (section: PlanSection, group: DisplayGroup) => {
   collapsedGroups.value[key] = !collapsedGroups.value[key]
 }
 const editedCount = (categories: Category[]) =>
-  categories.filter(category => !isOff(category) && deltaFor(category) !== 0).length
+  categories.filter(category => isEdited(category)).length
 const offCount = (categories: Category[]) => categories.filter(category => isOff(category)).length
 const collapsedHint = (categories: Category[]) => {
   const parts: string[] = []
@@ -537,7 +537,7 @@ function trashRow (section: PlanSection, group: DisplayGroup, category: Category
     planName: section.planName,
     group: group.name,
     name: catName(category) || 'Unnamed category',
-    goal: goalMonthly(category),
+    goal: rawGoalMonthly(category),
     custom: isCustom(category)
   })
 }
@@ -633,19 +633,40 @@ function onPlanHeaderDrop (section: PlanSection) {
 // Amount fields accept YNAB-style math ("+200", "1200/12"); after evaluating
 // we write the normalized number back into the field ourselves, since Vue
 // won't re-render when the bound value didn't change (e.g. invalid input).
+// Typing in the New goal column drafts a plain monthly target of that amount
+// (a weekly/yearly/by-date goal converts to monthly — the pen beside the field
+// reshapes it). $0 removes the target; an empty field goes back to YNAB's.
+function setMonthlyGoal (category: Category, milliunits: number) {
+  if (milliunits <= 0) {
+    if (isCustom(category)) structure.clearTarget(category.id)
+    else structure.setTarget(category.id, { target: null })
+  } else {
+    structure.setTarget(category.id, { target: milliunits, frequency: 'monthly' })
+  }
+  if (!targetDiffers(category)) structure.clearTarget(category.id)
+}
+
 function onAmountChange (category: Category, event: Event) {
   const target = event.target as HTMLInputElement
   if (!target.value.trim()) {
-    clearDraft(category.id)
+    structure.clearTarget(category.id)
     target.value = fmt(draftFor(category))
     return
   }
   const result = evaluateAmountExpression(target.value, draftFor(category) / 1000)
-  if (result !== null) {
-    setDraft(category.id, Math.round(result * 1000), goalMonthly(category))
-  }
+  if (result !== null) setMonthlyGoal(category, Math.round(result * 1000))
   target.value = fmt(draftFor(category))
 }
+
+// Earlier builds kept a per-month "Monthly" amount beside the target; those
+// become monthly target drafts the first time each month loads.
+watch(drafts, (map) => {
+  for (const [id, value] of Object.entries(map)) {
+    if (id === INCOME_KEY) continue
+    if (!structure.targets.value[id] && value > 0) structure.setTarget(id, { target: value, frequency: 'monthly' })
+    clearDraft(id)
+  }
+}, { immediate: true })
 
 function onIncomeChange (event: Event) {
   const target = event.target as HTMLInputElement
@@ -692,7 +713,7 @@ function csvEscape (value: string) {
 
 function exportCsv () {
   const money = (milliunits: number) => (milliunits / 1000).toFixed(2)
-  const lines = ['Budget,Group,Category,Goal / month,Monthly,Difference,Included']
+  const lines = ['Budget,Group,Category,Goal / month,New goal,Difference,Included']
   for (const section of sections.value) {
     for (const group of section.groups) {
       for (const category of group.categories) {
@@ -700,7 +721,7 @@ function exportCsv () {
           csvEscape(section.planName),
           csvEscape(group.name),
           csvEscape(catName(category) || 'What-if row'),
-          isCustom(category) && !targetDraftFor(category) ? '' : money(goalMonthly(category)),
+          isCustom(category) ? '' : money(rawGoalMonthly(category)),
           money(effectiveMonthly(category)),
           money(effectiveDelta(category)),
           isOff(category) ? 'no' : 'yes'
@@ -797,7 +818,7 @@ function importCsv () {
           setDisabled(hit.id, !included)
           const monthly = Number.parseFloat(cols[4] ?? '')
           if (included && Number.isFinite(monthly)) {
-            setDraft(hit.id, Math.round(monthly * 1000), goalMonthly(hit))
+            setMonthlyGoal(hit, Math.round(monthly * 1000))
           }
         }
         imported.value = true
@@ -811,11 +832,12 @@ function importCsv () {
 
 
 // ---- Sync to YNAB ---------------------------------------------------------
-// The diff is simply the overlay: drafts, renames, moves, custom groups and
-// rows ARE the difference between this page and the snapshot truth. Each
+// The diff is simply the overlay: target drafts, renames, moves, custom groups
+// and rows ARE the difference between this page and the snapshot truth. Each
 // action maps to one (sometimes two) YNAB API writes via /api/ynab/push.
 // Verified against YNAB's API: hiding categories and cross-budget moves are
-// impossible there — those stay local, and the review modal says so.
+// impossible there — trash stays local, and a cross-budget move becomes
+// "create it over there, exclude it here" (the review modal says so).
 
 type SyncKind = 'update' | 'set-target' | 'move' | 'rename' | 'create-group' | 'create-cat' | 'exclude'
 
@@ -834,12 +856,10 @@ interface SyncAction {
     groupRef?: string      // custom group key whose create-group must run first
     goalTarget?: number | null
     localId?: string       // the custom row behind a create-cat
+    movedId?: string       // the real category a cross-budget create-cat recreates
     targetDraft?: TargetDraft
     zeroBudget?: boolean
     clearTarget?: boolean
-    // set when this set-target came from a Monthly-column draft, so success
-    // clears that draft rather than a target-editor overlay
-    fromMonthlyDraft?: string
   }
   dependsOn?: string
   // Derived from a budget that can't push yet (manual, unlinked). Rendered in
@@ -919,6 +939,23 @@ const simpleMonthlyGoal = (category: Category) =>
     || (category.goal_cadence === 1 && (category.goal_cadence_frequency ?? 1) === 1)
   ))
 
+// The target a category carries into another budget: its drafted shape, or
+// YNAB's own translated into what the API can write (odd cadences and
+// build-to-balance goals travel as their monthly cost).
+function carriedTarget (category: Category): TargetDraft | undefined {
+  const draft = targetDraftFor(category)
+  if (draft) return draft.target === null ? undefined : draft
+  if (!category.goal_type || !category.goal_target) return undefined
+  const cad = category.goal_cadence
+  const freq = category.goal_cadence_frequency ?? 1
+  if (cad === 2 && freq === 1) return { target: category.goal_target, frequency: 'weekly' }
+  if (cad === 13 && freq === 1) return { target: category.goal_target, frequency: 'yearly' }
+  if ((cad == null || cad === 0) && category.goal_target_date) return { target: category.goal_target, targetDate: category.goal_target_date }
+  if (simpleMonthlyGoal(category) || category.goal_type === 'DEBT') return { target: category.goal_target, frequency: 'monthly' }
+  const monthly = rawGoalMonthly(category)
+  return monthly > 0 ? { target: monthly, frequency: 'monthly' } : undefined
+}
+
 const syncDerivation = computed(() => {
   const actions: SyncAction[] = []
   let crossBudget = 0
@@ -957,13 +994,11 @@ const syncDerivation = computed(() => {
         if (isCustom(category)) {
           const name = catName(category).trim()
           if (!name) { unnamedCustom++; continue }
-          const draft = drafts.value[category.id]
-          // A drafted target becomes the newborn category's goal; without one,
-          // the Monthly amount becomes a plain monthly target.
+          // The row's drafted target becomes the newborn category's goal.
           const rowTarget = targetDraftFor(category)
           const withTarget = rowTarget && rowTarget.target !== null ? rowTarget : undefined
           const detail = `in ${section.planName} · ${group.name}`
-            + (withTarget ? ` · target ${targetDraftLabel(withTarget)}` : draft ? ` · ${fmt(draft)} / month` : '')
+            + (withTarget ? ` · target ${targetDraftLabel(withTarget)}` : '')
           if (!sectionPush) {
             bump(section.planId)
             actions.push({
@@ -988,7 +1023,6 @@ const syncDerivation = computed(() => {
               localId: category.id,
               groupId: group.custom ? undefined : realGroupIds.value.get(`${section.planId}::${group.key}`),
               groupRef: group.custom ? group.key : undefined,
-              goalTarget: draft ?? null,
               targetDraft: withTarget
             },
             dependsOn: group.custom ? `grp-${section.planId}-${group.key}` : undefined
@@ -1000,9 +1034,74 @@ const syncDerivation = computed(() => {
         if (!home) continue
         const homePush = pushable(home.planId)
 
-        if (home.planId !== section.planId) {
+        const cross = home.planId !== section.planId
+        if (cross && !isOff(category)) {
+          // YNAB can't move a category between budgets, so the move becomes
+          // two writes: recreate it in the destination (name, group, and
+          // target carried along) and exclude it where it came from.
           crossBudget++
-        } else if (home.groupName !== group.name || group.custom) {
+          const name = catName(category).trim() || category.name
+          const carried = carriedTarget(category)
+          const detail = `moved from ${home.planName} · into ${section.planName} · ${group.name}`
+            + (carried ? ` · target ${targetDraftLabel(carried)}` : '')
+          if (sectionPush) {
+            actions.push({
+              aid: `xnew-${category.id}`,
+              kind: 'create-cat',
+              title: `Create “${name}”`,
+              detail,
+              sourceId: section.planId,
+              exec: {
+                name,
+                movedId: category.id,
+                groupId: group.custom ? undefined : realGroupIds.value.get(`${section.planId}::${group.key}`),
+                groupRef: group.custom ? group.key : undefined,
+                targetDraft: carried
+              },
+              dependsOn: group.custom ? `grp-${section.planId}-${group.key}` : undefined
+            })
+          } else {
+            bump(section.planId)
+            actions.push({
+              blocked: true,
+              aid: `xnew-${category.id}`,
+              kind: 'create-cat',
+              title: `Create “${name}”`,
+              detail,
+              sourceId: section.planId,
+              exec: { name, movedId: category.id }
+            })
+          }
+          const offDetail = `moved to ${section.planName} — assigns ${fmt(0)} and clears the target in ${home.planName}`
+          if (homePush) {
+            actions.push({
+              aid: `xoff-${category.id}`,
+              kind: 'exclude',
+              title: catName(category),
+              detail: offDetail,
+              sourceId: home.planId,
+              exec: {
+                categoryId: category.id,
+                zeroBudget: category.budgeted !== 0,
+                clearTarget: Boolean(category.goal_type)
+              }
+            })
+          } else {
+            bump(home.planId)
+            actions.push({
+              blocked: true,
+              aid: `xoff-${category.id}`,
+              kind: 'exclude',
+              title: catName(category),
+              detail: offDetail,
+              sourceId: home.planId,
+              exec: { categoryId: category.id }
+            })
+          }
+          continue
+        }
+
+        if (!cross && (home.groupName !== group.name || group.custom)) {
           if (homePush) {
             actions.push({
               aid: `mov-${category.id}`,
@@ -1032,7 +1131,7 @@ const syncDerivation = computed(() => {
         }
 
         const renamed = structure.renames.value[category.id]
-        if (renamed && renamed !== category.name) {
+        if (!cross && renamed && renamed !== category.name) {
           if (homePush) {
             actions.push({
               aid: `ren-${category.id}`,
@@ -1056,40 +1155,10 @@ const syncDerivation = computed(() => {
           }
         }
 
-        // A Monthly edit is tinkering with the PLAN, so it writes the TARGET —
-        // never the month's assigned amount. Non-monthly goal shapes convert
-        // to a monthly target (the review says so). When the target editor
-        // holds its own draft for this row, that draft owns the goal.
-        if (!isOff(category) && deltaFor(category) !== 0 && !targetDraftFor(category)) {
-          const reshaped = !simpleMonthlyGoal(category)
-          const updAction = {
-            aid: `upd-${category.id}`,
-            kind: 'set-target' as const,
-            title: catName(category),
-            detail: `target ${fmt(goalMonthly(category))} → ${fmt(draftFor(category))} / month`
-              + (reshaped ? ` (${goalLabel(category) || 'current goal'} becomes monthly)` : ''),
-            sourceId: home.planId,
-            exec: {
-              categoryId: category.id,
-              targetDraft: {
-                target: draftFor(category),
-                ...(reshaped ? { frequency: 'monthly' as const } : {})
-              },
-              fromMonthlyDraft: category.id
-            }
-          }
-          if (homePush) {
-            actions.push(updAction)
-          } else {
-            bump(home.planId)
-            actions.push({ ...updAction, blocked: true })
-          }
-        }
-
         // A drafted target that differs from YNAB's shape pushes the full
         // target rewrite (recurring cadence, by-date, or removal).
         const targetDraft = targetDraftFor(category)
-        if (targetDraft && targetDiffers(category)) {
+        if (!cross && targetDraft && targetDiffers(category)) {
           if (homePush) {
             actions.push({
               aid: `tgt-${category.id}`,
@@ -1162,9 +1231,9 @@ const syncDerivation = computed(() => {
   }
 
   const notes: string[] = []
-  if (incomeDelta.value !== 0) notes.push(`your what-if income (${fmt(income.value)})`)
-  if (trashedReal) notes.push(`${trashedReal} trashed ${trashedReal === 1 ? 'row' : 'rows'} — YNAB's API can't hide categories, so they stay hidden here`)
-  if (crossBudget) notes.push(`${crossBudget} cross-budget ${crossBudget === 1 ? 'move' : 'moves'} (YNAB can't move categories between budgets)`)
+  if (incomeDelta.value !== 0) notes.push(`your what-if income (${fmt(income.value)}) stays local — YNAB has no equivalent`)
+  if (trashedReal) notes.push(`${trashedReal} trashed ${trashedReal === 1 ? 'row' : 'rows'} stay local — YNAB's API can't hide categories`)
+  if (crossBudget) notes.push(`${crossBudget} cross-budget ${crossBudget === 1 ? 'move' : 'moves'}: YNAB can't move a category between budgets, so it's created in the new budget and excluded (${fmt(0)} assigned, target cleared) in the old one — hide the leftover there by hand`)
   if (unnamedCustom) notes.push(`${unnamedCustom} unnamed what-if ${unnamedCustom === 1 ? 'row' : 'rows'}`)
   const linkable: Array<{ planId: string, name: string, count: number }> = []
   for (const [planId, count] of blockedSources) {
@@ -1461,10 +1530,7 @@ async function doSync () {
   // Success: retire the overlay entries that are now YNAB truth, then refetch.
   for (const action of picked) {
     if (action.kind === 'set-target') {
-      // Monthly-column drafts and target-editor drafts both land here — clear
-      // whichever overlay produced the action.
-      if (action.exec.fromMonthlyDraft) clearDraft(action.exec.fromMonthlyDraft)
-      else structure.clearTarget(action.exec.categoryId!)
+      structure.clearTarget(action.exec.categoryId!)
     } else if (action.kind === 'rename') {
       structure.setRename(action.exec.categoryId!, '')
     } else if (action.kind === 'move') {
@@ -1473,6 +1539,12 @@ async function doSync () {
       structure.releaseClaim(action.exec.localId)
       structure.clearTarget(action.exec.localId)
       removeCustom(action.exec.localId)
+    } else if (action.kind === 'create-cat' && action.exec.movedId) {
+      // The recreated category comes back as truth in its new budget; the
+      // original's local claim, rename, and target were all carried over.
+      structure.releaseClaim(action.exec.movedId)
+      structure.clearTarget(action.exec.movedId)
+      structure.setRename(action.exec.movedId, '')
     } else if (action.kind === 'create-group' && action.exec.groupRef) {
       structure.renameLayoutKey(`${action.sourceId}::${action.exec.groupRef}`, `${action.sourceId}::${action.exec.name}`)
       structure.removeGroup(action.exec.groupRef)
@@ -1485,9 +1557,10 @@ async function doSync () {
 }
 
 // ---- Target editor ---------------------------------------------------------
-// The popover behind every Goal cell: reshape a category's target — amount,
-// cadence, by-date, set-aside vs refill — or convert any shape to its true
-// monthly cost (goalMonthlyFor's math). Drafts overlay locally; sync writes.
+// The popover behind the pen in every New goal cell: reshape a category's
+// target — amount, cadence, by-date, set-aside vs refill — or convert any
+// shape to its true monthly cost (goalMonthlyFor's math). Drafts overlay
+// locally; sync writes.
 
 type EditorCadence = 'monthly' | 'weekly' | 'yearly' | 'bydate' | 'none' | 'custom'
 
@@ -1517,10 +1590,8 @@ function openTargetEditor (category: Category) {
     else cadence = draft.frequency ?? 'monthly'
     if (typeof draft.needsWholeAmount === 'boolean') needs = draft.needsWholeAmount ? 'aside' : 'refill'
   } else if (isCustom(category)) {
-    // A what-if row has no YNAB goal to mirror — start a fresh monthly
-    // target, seeded from whatever amount the row already carries.
+    // A what-if row has no YNAB goal to mirror — start a fresh monthly target.
     cadence = 'monthly'
-    amount = drafts.value[category.id] ?? 0
   } else {
     amount = category.goal_target ?? 0
     const cad = category.goal_cadence
@@ -1631,7 +1702,7 @@ function removeTargetDraft () {
 function onDocumentClick (event: MouseEvent) {
   if (!targetEditor.value) return
   const target = event.target as HTMLElement
-  if (!target.closest('.target-pop') && !target.closest('.goal-btn')) closeTargetEditor()
+  if (!target.closest('.target-pop') && !target.closest('.shape-btn')) closeTargetEditor()
 }
 onMounted(() => document.addEventListener('click', onDocumentClick))
 onUnmounted(() => document.removeEventListener('click', onDocumentClick))
@@ -1676,23 +1747,34 @@ function rawTargetLabel (category: Category) {
   return goalLabel(category) || 'no target'
 }
 
-// What the Goal cell shows: the drafted shape when one exists, YNAB's otherwise.
-function goalCellLabel (category: Category) {
-  const draft = targetDraftFor(category)
-  if (draft) return targetDraftLabel(draft)
-  if (isCustom(category)) return 'add a target…'
+// The Goal cell is YNAB's truth, read-only: the target in its own period,
+// plus its monthly cost when the period isn't a month.
+function rawGoalCellLabel (category: Category) {
+  if (isCustom(category)) return 'not in YNAB yet'
   return goalLabel(category) || 'no target'
 }
 
-function goalCellTitle (category: Category) {
-  if (isCustom(category)) {
-    return targetDraftFor(category)
-      ? 'Target for this new category — written to YNAB when the row is created. Click to edit.'
-      : 'Give this what-if row a target'
-  }
+function rawMonthlyHint (category: Category) {
+  if (isCustom(category) || !category.goal_type || !category.goal_target) return ''
+  const plainMonthly = !category.goal_target_date && category.goal_type !== 'TB' && cadenceLabel(category) === '/ month'
+  return plainMonthly ? '' : `≈ ${fmt(rawGoalMonthly(category))} / month`
+}
+
+// Under the New goal amount: the drafted shape when it isn't a plain monthly
+// target (the field itself already says "per month").
+function newShapeCaption (category: Category) {
+  const draft = targetDraftFor(category)
+  if (!draft) return ''
+  if (draft.target === null) return 'target removed'
+  if (draft.targetDate || (draft.frequency && draft.frequency !== 'monthly')) return targetDraftLabel(draft)
+  return ''
+}
+
+function shapeButtonTitle (category: Category) {
+  if (isCustom(category)) return 'Shape this target: weekly, yearly, or by a date'
   return targetDraftFor(category)
-    ? `Target drafted here only — YNAB still says ${rawTargetLabel(category)}. Click to edit.`
-    : "Edit this category's target"
+    ? `Reshape the target — YNAB still says ${rawTargetLabel(category)}`
+    : 'Reshape the target: weekly, yearly, or by a date'
 }
 
 function targetActionDetail (category: Category, draft: TargetDraft) {
@@ -1735,12 +1817,13 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
 
       <section v-if="showHelp" class="help">
         <div class="help-copy">
-          <b>How Tinkrr works.</b> Every category with a goal shows up with its monthly cost.
-          Tweak the <b>Monthly</b> column (or Income), untick rows to leave them out of the
-          math, trash rows to remove them from the budget, drag the ⠿ handle to move a
-          category into another group — or another budget. Fields do math like YNAB's:
-          <code>1200/12</code>, <code>+200</code>. <b>Nothing is written to YNAB</b> —
-          drafts live in this browser only.
+          <b>How Tinkrr works.</b> Every category with a goal shows up with what YNAB plans
+          for it per month. Type a <b>New goal</b> (or a new Income) to see what your plan
+          costs against what you expect to earn — the <b>Difference</b> column keeps score.
+          Untick rows to leave them out, trash rows to drop them from the budget, drag the
+          ⠿ handle to move a category into another group — or another budget. Fields do math
+          like YNAB's: <code>1200/12</code>, <code>+200</code>. <b>Nothing is written to
+          YNAB</b> until you sync — drafts live in this browser only.
         </div>
         <button class="y-btn-outline" @click="dismissHelp">Got it</button>
       </section>
@@ -1798,8 +1881,8 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
         <section v-else class="card table-card" :class="{ 'pop-open': Boolean(targetEditor) }">
           <div class="grid head-row">
             <div>Category</div>
-            <div>Goal</div>
-            <div class="right teal-head">Monthly <span class="head-hint">· editable, stays local</span></div>
+            <div>Goal <span class="head-hint">· in YNAB today</span></div>
+            <div class="right teal-head">New goal <span class="head-hint">· per month, stays local</span></div>
             <div class="right">Difference</div>
           </div>
 
@@ -1872,7 +1955,7 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
                     :key="category.id"
                     class="grid row"
                     :class="{
-                      edited: !isOff(category) && deltaFor(category) !== 0,
+                      edited: isEdited(category),
                       off: isOff(category),
                       'drop-before': dropBeforeId === category.id,
                       lifting: dragging === category.id
@@ -1928,15 +2011,59 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
                         </button>
                       </template>
                     </div>
-                    <div class="soft goal-cell">
+                    <div class="soft goal-cell" :title="isCustom(category) ? 'A what-if row has no goal in YNAB until you sync it' : 'What YNAB plans today — edit the New goal column instead'">
+                      <span class="goal-raw">{{ rawGoalCellLabel(category) }}</span>
+                      <span v-if="rawMonthlyHint(category)" class="goal-approx">{{ rawMonthlyHint(category) }}</span>
+                    </div>
+                    <div class="right monthly-cell">
+                      <div class="new-goal">
+                        <div class="new-goal-main">
+                          <input
+                            type="text"
+                            inputmode="decimal"
+                            class="amount"
+                            :class="{ hot: isEdited(category) }"
+                            :value="fmt(draftFor(category))"
+                            :aria-label="`New goal per month for ${catName(category) || 'this what-if row'}`"
+                            :disabled="isOff(category)"
+                            title="Per month — does math: +200, 1200/12 — Enter to apply"
+                            @change="onAmountChange(category, $event)"
+                            @focus="selectAll"
+                            @keydown.enter="blurOnEnter"
+                          >
+                          <button
+                            class="shape-btn"
+                            :class="{ drafted: Boolean(targetDraftFor(category)) }"
+                            :title="shapeButtonTitle(category)"
+                            :aria-label="`Reshape the target for ${catName(category) || 'this what-if row'}`"
+                            :disabled="isOff(category)"
+                            @click.stop="targetEditor?.categoryId === category.id ? closeTargetEditor() : openTargetEditor(category)"
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /></svg>
+                          </button>
+                        </div>
+                        <div v-if="newShapeCaption(category)" class="new-goal-shape">{{ newShapeCaption(category) }}</div>
+                      </div>
                       <button
-                        class="goal-btn"
-                        :class="{ drafted: Boolean(targetDraftFor(category)) }"
-                        :title="goalCellTitle(category)"
-                        @click.stop="targetEditor?.categoryId === category.id ? closeTargetEditor() : openTargetEditor(category)"
+                        v-if="isCustom(category)"
+                        class="mini-act"
+                        title="Remove this what-if row"
+                        @click="discardCustomRow(category.id)"
+                      >✕</button>
+                      <button
+                        v-else
+                        class="mini-act"
+                        :class="{ ghosted: !isEdited(category) }"
+                        :title="`Back to YNAB's ${rawTargetLabel(category)}`"
+                        :tabindex="isEdited(category) ? 0 : -1"
+                        @click="structure.clearTarget(category.id)"
+                      >↺</button>
+                      <button
+                        class="mini-act trash-act"
+                        title="Remove from this budget (goes to Trash)"
+                        @click="trashRow(section, group, category)"
                       >
-                        <span class="goal-btn-text">{{ goalCellLabel(category) }}<span v-if="targetDraftFor(category)" class="goal-draft-mark"> · draft</span></span>
-                        <svg class="goal-pen" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /></svg>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18" /><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>
                       </button>
                       <div
                         v-if="targetEditor && targetEditor.categoryId === category.id"
@@ -2002,42 +2129,6 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
                         </div>
                       </div>
                     </div>
-                    <div class="right monthly-cell">
-                      <input
-                        type="text"
-                        inputmode="decimal"
-                        class="amount"
-                        :class="{ hot: !isOff(category) && deltaFor(category) !== 0 }"
-                        :value="fmt(draftFor(category))"
-                        :aria-label="`Monthly amount for ${catName(category)}`"
-                        :disabled="isOff(category)"
-                        title="Does math: +200, 1200/12 — Enter to apply"
-                        @change="onAmountChange(category, $event)"
-                        @focus="selectAll"
-                        @keydown.enter="blurOnEnter"
-                      >
-                      <button
-                        v-if="isCustom(category)"
-                        class="mini-act"
-                        title="Remove this what-if row"
-                        @click="discardCustomRow(category.id)"
-                      >✕</button>
-                      <button
-                        v-else
-                        class="mini-act"
-                        :class="{ ghosted: isOff(category) || deltaFor(category) === 0 }"
-                        :title="`Reset to the goal's ${fmt(goalMonthly(category))}`"
-                        :tabindex="isOff(category) || deltaFor(category) === 0 ? -1 : 0"
-                        @click="clearDraft(category.id)"
-                      >↺</button>
-                      <button
-                        class="mini-act trash-act"
-                        title="Remove from this budget (goes to Trash)"
-                        @click="trashRow(section, group, category)"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18" /><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>
-                      </button>
-                    </div>
                     <div class="right"><span :class="pillClass(effectiveDelta(category))">{{ effectiveDelta(category) !== 0 ? fmtDelta(effectiveDelta(category)) : '—' }}</span></div>
                   </div>
 
@@ -2082,7 +2173,7 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
           </p>
           <p v-else-if="!anyMatch && (filterActive || chip !== 'All')" class="table-note">
             <template v-if="filterActive">No categories match “{{ filter.trim() }}”.</template>
-            <template v-else-if="chip === 'Edited'">No edited rows yet — change a Monthly amount and it'll show up here.</template>
+            <template v-else-if="chip === 'Edited'">No edited rows yet — type a new goal and it'll show up here.</template>
             <template v-else>No excluded rows — untick a category to leave it out of the math.</template>
           </p>
         </section>
@@ -2191,7 +2282,7 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
           </div>
 
           <div v-if="syncNotes.length" class="sync-notes">
-            <b>Stays local (YNAB has no equivalent):</b> {{ syncNotes.join(' · ') }}
+            <b>Good to know:</b> {{ syncNotes.join(' · ') }}
           </div>
           <div v-if="canPush" class="sync-foot">
             <span class="sync-summary">{{ pickedCount }} of {{ syncActions.length }} actions selected · unticked stay a local draft</span>
@@ -2288,11 +2379,11 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
               <div class="change-main">
                 <div class="change-name"><template v-if="multiPlan">{{ planNameByCategory.get(category.id) }} · </template>{{ catName(category) || 'What-if row' }}</div>
                 <div class="change-detail">
-                  <template v-if="isCustom(category)">added · {{ fmt(draftFor(category)) }}</template>
-                  <template v-else>{{ fmt(goalMonthly(category)) }} → {{ fmt(draftFor(category)) }}</template>
+                  <template v-if="isCustom(category)">added · {{ targetDraftFor(category) ? targetDraftLabel(targetDraftFor(category)!) : fmt(draftFor(category)) }}</template>
+                  <template v-else>{{ rawTargetLabel(category) }} → {{ targetDraftFor(category) ? targetDraftLabel(targetDraftFor(category)!) : fmt(draftFor(category)) }}</template>
                 </div>
               </div>
-              <span :class="pillClass(deltaFor(category))">{{ fmtDelta(deltaFor(category)) }}</span>
+              <span :class="pillClass(deltaFor(category))">{{ deltaFor(category) !== 0 ? fmtDelta(deltaFor(category)) : '—' }}</span>
               <button
                 v-if="isCustom(category)"
                 class="undo"
@@ -2302,8 +2393,8 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
               <button
                 v-else
                 class="undo"
-                :title="`Reset to the goal's ${fmt(goalMonthly(category))}`"
-                @click="clearDraft(category.id)"
+                :title="`Back to YNAB's ${rawTargetLabel(category)}`"
+                @click="structure.clearTarget(category.id)"
               >↺</button>
             </div>
             <div v-for="category in excluded" :key="`off-${category.id}`" class="change">
@@ -2311,26 +2402,16 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
                 <div class="change-name"><template v-if="multiPlan">{{ planNameByCategory.get(category.id) }} · </template>{{ catName(category) || 'What-if row' }}</div>
                 <div class="change-detail">
                   <template v-if="isCustom(category)">what-if row excluded</template>
-                  <template v-else>excluded · goal {{ fmt(goalMonthly(category)) }}</template>
+                  <template v-else>excluded · goal {{ fmt(rawGoalMonthly(category)) }}</template>
                 </div>
               </div>
               <span v-if="!isCustom(category)" :class="pillClass(effectiveDelta(category))">{{ fmtDelta(effectiveDelta(category)) }}</span>
               <button class="undo" title="Include again" @click="setDisabled(category.id, false)">↺</button>
             </div>
-            <div v-for="category in targetChanges" :key="`tgt-${category.id}`" class="change">
-              <div class="change-main">
-                <div class="change-name"><template v-if="multiPlan">{{ planNameByCategory.get(category.id) }} · </template>{{ catName(category) || 'What-if row' }}</div>
-                <div class="change-detail">target: {{ rawTargetLabel(category) }} → {{ targetDraftLabel(targetDraftFor(category)!) }}</div>
-              </div>
-              <span :class="pillClass(goalMonthly(category) - rawGoalMonthly(category))">
-                {{ goalMonthly(category) !== rawGoalMonthly(category) ? fmtDelta(goalMonthly(category) - rawGoalMonthly(category)) : '—' }}
-              </span>
-              <button class="undo" :title="isCustom(category) ? 'Remove this target' : `Back to YNAB's ${rawTargetLabel(category)}`" @click="structure.clearTarget(category.id)">↺</button>
-            </div>
             <div class="rail-note">Saved in this browser only — nothing is sent to YNAB.</div>
           </div>
           <div v-else class="rail-empty">
-            No edits yet. Change a Monthly amount or untick a category and it'll show up here.
+            No edits yet. Type a new goal or untick a category and it'll show up here.
           </div>
         </template>
       </div>
@@ -2607,33 +2688,38 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
 .rename-input.active { border: 1.5px solid var(--teal); }
 .rename-input:focus { outline: none; border-color: var(--teal); }
 
-.goal-cell { min-width: 0; color: var(--fg-muted); position: relative; }
+.goal-cell { min-width: 0; color: var(--fg-muted); display: flex; flex-direction: column; gap: 1px; }
+.goal-raw { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-approx { font-size: 11px; color: var(--fg-faint); font-weight: 600; white-space: nowrap; }
 
-/* ---- Target editor ---- */
-.goal-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  max-width: 100%;
-  border: none;
+/* ---- New goal cell + target editor ---- */
+.new-goal { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; min-width: 0; }
+.new-goal-main { display: flex; align-items: center; gap: 4px; }
+.new-goal-shape { font-size: 11px; color: var(--teal-dark); font-weight: 700; white-space: nowrap; }
+.shape-btn {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid transparent;
+  border-radius: var(--r-xs);
   background: none;
   padding: 0;
-  font-size: 12.5px;
-  color: var(--fg-muted);
+  color: var(--border-input);
   cursor: pointer;
-  text-align: left;
+  transition: color 0.12s, border-color 0.12s;
 }
-.goal-btn-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.goal-btn .goal-pen { flex: none; color: var(--border-input); opacity: 0; transition: opacity 0.12s; }
-.goal-btn:hover .goal-pen, .goal-btn:focus-visible .goal-pen { opacity: 1; color: var(--teal-dark); }
-.goal-btn:hover { color: var(--teal-dark); }
-.goal-btn.drafted { color: var(--teal-dark); font-weight: 700; }
-.goal-draft-mark { color: var(--fg-faint); font-weight: 600; font-style: italic; }
+.shape-btn:hover:not(:disabled), .shape-btn:focus-visible { color: var(--teal-dark); border-color: var(--border-input); }
+.shape-btn.drafted { color: var(--teal-dark); }
+.shape-btn:disabled { opacity: 0.35; cursor: default; }
+.row:hover .shape-btn:not(:disabled) { color: var(--teal); }
 
 .target-pop {
   position: absolute;
   top: calc(100% + 6px);
-  left: 0;
+  right: 0;
+  text-align: left;
   z-index: 40;
   width: 280px;
   background: var(--bg-card);
@@ -2742,7 +2828,7 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
   padding: 0;
 }
 
-.monthly-cell { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
+.monthly-cell { display: flex; align-items: center; gap: 6px; justify-content: flex-end; position: relative; }
 .amount {
   width: 104px;
   text-align: right;
