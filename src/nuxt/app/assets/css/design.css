@@ -222,6 +222,7 @@ input[type="checkbox"] { -webkit-appearance: checkbox; appearance: auto; }
 /* Phones: 16px inputs keep iOS Safari from zooming the page on focus, and
    every primary control clears the 44px touch target. */
 @media (max-width: 759px) {
+  html, body { overflow-x: hidden; }
   input:not([type="checkbox"]):not([type="radio"]), select, textarea { font-size: 16px; }
   .y-btn, .y-btn-secondary, .y-btn-outline, .y-btn-danger, .y-btn-dashed { min-height: 44px; }
 }

@@ -32,6 +32,9 @@ useViewport()
 @media (max-width: 759px) {
   .app {
     flex-direction: column;
+    /* nowrap matters: a wrapped column sizes its line to the widest
+       content, which let a page grow past the viewport */
+    flex-wrap: nowrap;
     align-items: stretch;
     padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
   }
