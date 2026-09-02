@@ -25,7 +25,11 @@ export default defineEventHandler(async (event) => {
   const type = file.type?.split(';')[0]?.trim().toLowerCase() || 'application/octet-stream'
   const upload = new Blob([file.data], { type })
 
+  // Raster formats only: an SVG would be served back same-origin with its
+  // scripts intact.
+  const allowed = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
   try {
+    if (!allowed.includes(type)) throw new Error('type')
     ensureBlob(upload, { maxSize: '1MB', types: ['image'] })
   } catch {
     throw createError({ statusCode: 415, statusMessage: 'Use a PNG, JPEG, WebP, or GIF image' })

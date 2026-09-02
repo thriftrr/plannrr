@@ -97,10 +97,16 @@ export function parseCsv (text: string): string[][] {
 const categoryId = (groupName: string, name: string) =>
   `impc_${createHash('sha256').update(`${groupName}|${name}`).digest('hex').slice(0, 12)}`
 
+const MAX_CSV_BYTES = 64 * 1024 * 1024
+
 export function parseYnabExportZip (bytes: Uint8Array): ParsedImport {
   let files: Record<string, Uint8Array>
   try {
-    files = unzipSync(bytes)
+    // Only the CSVs we read get inflated, each capped well above any real
+    // export — a 20MB zip that "inflates" to gigabytes never gets the chance.
+    files = unzipSync(bytes, {
+      filter: entry => /\.csv$/i.test(entry.name) && entry.originalSize <= MAX_CSV_BYTES
+    })
   } catch {
     throw createError({ statusCode: 400, statusMessage: 'That file is not a readable zip archive' })
   }

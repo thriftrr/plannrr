@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm'
+import { and, desc, eq, gt, isNull, lt, sql } from 'drizzle-orm'
 
 // Queries over the NuxtHub drizzle client (`db` and `schema` are
 // auto-imported server globals provided by @nuxthub/core).
@@ -28,7 +28,7 @@ export interface ImportedPlanRow {
 // Hard ceiling on accounts: with open magic-link signup this is what bounds
 // the app's entire resource footprint (D1 rows, KV snapshots, R2 avatars,
 // email sends). Raise deliberately, not by accident.
-const MAX_USERS = 250
+const MAX_USERS = Math.max(Number.parseInt(useRuntimeConfig().maxUsers, 10) || 250, 1)
 
 export async function ensureUser (email: string): Promise<DbUser> {
   const existing = await db.select().from(schema.users).where(eq(schema.users.email, email)).get()
@@ -66,6 +66,9 @@ export async function setUserPat (id: string, patCipher: string | null): Promise
 }
 
 export async function insertLoginToken (tokenHash: string, email: string, expiresAt: string): Promise<void> {
+  // Spent and expired hashes are worthless; sweep them so the table stays
+  // the size of "links in flight".
+  await db.delete(schema.loginTokens).where(lt(schema.loginTokens.expiresAt, sql`datetime('now')`)).run()
   await db.insert(schema.loginTokens).values({ tokenHash, email, expiresAt }).run()
 }
 

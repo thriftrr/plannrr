@@ -32,10 +32,13 @@ export async function assertRateLimit (rules: WindowRule[]): Promise<void> {
   }
 }
 
-// Cloudflare puts the real client address in cf-connecting-ip; local dev has
+// Cloudflare puts the real client address in cf-connecting-ip. Off
+// Cloudflare, X-Forwarded-For is only honored when NUXT_TRUST_PROXY=1 —
+// otherwise any client could pick its own rate-limit bucket. Local dev has
 // neither header, so everything shares one bucket there — harmless.
 export function clientIp (event: Parameters<typeof getRequestIP>[0]): string {
+  const { trustProxy } = useRuntimeConfig()
   return getHeader(event, 'cf-connecting-ip')
-    || getRequestIP(event, { xForwardedFor: true })
+    || getRequestIP(event, { xForwardedFor: Boolean(trustProxy) })
     || 'unknown'
 }

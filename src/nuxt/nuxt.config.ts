@@ -1,15 +1,17 @@
 // https://nuxt.com/docs/api/configuration/nuxt-config
 export default defineNuxtConfig({
-  // Self-hosted Cloudflare deployment (thriftrr account): production swaps the
-  // local sqlite/fs drivers for D1/KV/R2 bindings. Binding names are NuxtHub's
-  // defaults (DB / KV / CACHE / BLOB); the module emits the wrangler config at
-  // build time. Dev below keeps using .data/ untouched.
+  // Self-hosted Cloudflare deployment: production swaps the local sqlite/fs
+  // drivers for D1/KV/R2 bindings that YOU create in your own account (see
+  // "Deploying" in the root README). The ids come from .env at build time so
+  // the repo carries nothing account-specific. Binding names are NuxtHub's
+  // defaults (DB / KV / CACHE / BLOB); the module emits the wrangler config
+  // at build time. Dev below keeps using .data/ untouched.
   $production: {
     hub: {
-      cache: { driver: 'cloudflare-kv-binding', namespaceId: 'd81ccae66dd740bc904ed907da8fd590' },
-      db: { dialect: 'sqlite', driver: 'd1', connection: { databaseId: '938dec14-1866-470e-837b-58de71ce49bc' } },
-      kv: { driver: 'cloudflare-kv-binding', namespaceId: '0656efbde6e64dd6bcafbc1a4a0dd18c' },
-      blob: { driver: 'cloudflare-r2', bucketName: 'ynabrr-blob' }
+      cache: { driver: 'cloudflare-kv-binding', namespaceId: process.env.NUXT_CF_KV_CACHE_ID ?? '' },
+      db: { dialect: 'sqlite', driver: 'd1', connection: { databaseId: process.env.NUXT_CF_D1_DATABASE_ID ?? '' } },
+      kv: { driver: 'cloudflare-kv-binding', namespaceId: process.env.NUXT_CF_KV_ID ?? '' },
+      blob: { driver: 'cloudflare-r2', bucketName: process.env.NUXT_CF_R2_BUCKET ?? '' }
     }
   },
 
@@ -28,7 +30,7 @@ export default defineNuxtConfig({
 
   // Worker name for the Cloudflare build (otherwise nitro invents one).
   nitro: {
-    cloudflare: { wrangler: { name: 'plannrr' } }
+    cloudflare: { wrangler: { name: process.env.NUXT_CF_WORKER_NAME || 'plannrr' } }
   },
 
   app: {
@@ -87,7 +89,13 @@ export default defineNuxtConfig({
     // absolute origin for emailed links; defaults to the request origin
     appOrigin: '',
     // comma-separated emails that see the feedback inbox and get notified
-    // when feedback arrives (NUXT_ADMIN_EMAILS)
-    adminEmails: 'me@jonknoll.dev'
+    // when feedback arrives (NUXT_ADMIN_EMAILS). Nobody is admin until set.
+    adminEmails: '',
+    // NUXT_TRUST_PROXY=1 when self-hosting behind a reverse proxy that sets
+    // X-Forwarded-For (Cloudflare needs nothing — cf-connecting-ip is used)
+    trustProxy: '',
+    // sign-up ceiling (NUXT_MAX_USERS); keeps a public instance's D1/email
+    // spend bounded
+    maxUsers: '250'
   }
 })

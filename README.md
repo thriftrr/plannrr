@@ -69,6 +69,56 @@ domain must be onboarded first (`npx wrangler email sending enable <domain>`).
 Without any transport configured, dev logs the email and production refuses
 to send (fail closed).
 
+## Deploying (Cloudflare Workers)
+
+Plannrr runs as a single Worker with D1 (database), two KV namespaces (parsed
+imports + cache), and an R2 bucket (profile pictures). Everything is created in
+**your** Cloudflare account; the repo carries no account ids.
+
+1. `npx wrangler login` once, then create the resources:
+
+   ```sh
+   cd src/nuxt
+   npx wrangler d1 create plannrr-db
+   npx wrangler kv namespace create plannrr-kv
+   npx wrangler kv namespace create plannrr-cache
+   npx wrangler r2 bucket create plannrr-blob
+   ```
+
+2. Fill the "Cloudflare deployment" block of `src/nuxt/.env` with the ids
+   wrangler printed, plus `NUXT_CF_ACCOUNT_ID`, `NUXT_ADMIN_EMAILS` (who may
+   open the feedback inbox), a generated `NUXT_SESSION_SECRET`, and the
+   email-sending settings above.
+3. `make secrets` pushes the secret values (session secret, PAT secret, email
+   token) to the worker. Run it again whenever one changes.
+4. `make deploy` builds with the Cloudflare preset, applies pending D1
+   migrations, and deploys. Non-secret settings (admin emails, from address,
+   app origin) ride along as worker vars on every deploy.
+
+The magic-link flow needs an email transport in production, so onboard a
+sending domain before inviting anyone.
+
+## Security notes for self-hosters
+
+- **Set `NUXT_APP_ORIGIN`.** Production refuses to send magic links without
+  it, because a link built from the request's Host header could be pointed at
+  an attacker's domain by a spoofed proxy request.
+- **Behind your own reverse proxy?** Set `NUXT_TRUST_PROXY=1` so rate limits
+  key on `X-Forwarded-For`; leave it unset on Cloudflare, where the real
+  address arrives in `cf-connecting-ip`.
+- **Anyone can request a login email** for any address (capped per address,
+  per day, and per IP). `NUXT_MAX_USERS` bounds sign-ups; the magic-link
+  sender is the one endpoint on a public instance that spends money.
+- **Sessions are 30-day signed JWTs** in an httpOnly, SameSite=Lax cookie.
+  Logout clears the cookie but cannot revoke a stolen token; rotate
+  `NUXT_SESSION_SECRET` (`make secrets`) to invalidate every session at once.
+- **YNAB tokens** are stored AES-256-GCM encrypted under `NUXT_PAT_SECRET`
+  (falls back to the session secret) and never leave the server. Changing
+  that secret makes every stored token unreadable — users re-enter theirs.
+- Uploads are bounded (1MB raster images, 20MB export zips with a 64MB
+  inflate cap per CSV), other API bodies at 2MB, and responses carry a
+  Content-Security-Policy plus the usual hardening headers.
+
 ## YNAB API cheat sheet
 
 Reference: https://api.ynab.com/ (base `https://api.ynab.com/v1`, bearer token auth).
