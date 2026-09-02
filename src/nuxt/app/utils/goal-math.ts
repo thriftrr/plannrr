@@ -12,10 +12,16 @@ import type { Category } from '#shared/types/ynab'
 // month" tile) so the two can never disagree.
 
 // Rows that belong on a goal-driven surface: visible, real, and carrying a
-// goal. Shared so Tinkrr's table and Home's tiles count the same categories.
+// goal — Home's tiles and Calendrr.
 export function isGoalCategory (category: Category): boolean {
+  return isPlannableCategory(category) && Boolean(category.goal_type)
+}
+
+// Every category a person can plan with — goal or not. Tinkrr lists all of
+// these (a target can be drafted onto any of them); Home's tiles only count
+// the ones that already carry a goal.
+export function isPlannableCategory (category: Category): boolean {
   if (category.hidden || category.deleted || category.internal) return false
-  if (!category.goal_type) return false
   const group = category.category_group_name ?? 'Other'
   return group !== 'Internal Master Category' && group !== 'Hidden Categories'
 }

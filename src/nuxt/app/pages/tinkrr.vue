@@ -235,7 +235,7 @@ const sections = computed<PlanSection[]>(() => {
     const groups: DisplayGroup[] = []
     const byName = new Map<string, DisplayGroup>()
     for (const category of detail?.categories ?? []) {
-      if (!isGoalCategory(category)) continue
+      if (!isPlannableCategory(category)) continue
       if (trash[category.id]) continue
       const groupName = category.category_group_name ?? 'Other'
       let row = byName.get(groupName)
@@ -834,7 +834,9 @@ function importCsv () {
 // ---- Sync to YNAB ---------------------------------------------------------
 // The diff is simply the overlay: target drafts, renames, moves, custom groups
 // and rows ARE the difference between this page and the snapshot truth. Each
-// action maps to one (sometimes two) YNAB API writes via /api/ynab/push.
+// action maps to one YNAB API write via /api/ynab/push. Tinkrr plans; it
+// never writes a month's assigned amount — excluding a row removes its
+// target, nothing more.
 // Verified against YNAB's API: hiding categories and cross-budget moves are
 // impossible there — trash stays local, and a cross-budget move becomes
 // "create it over there, exclude it here" (the review modal says so).
@@ -858,7 +860,6 @@ interface SyncAction {
     localId?: string       // the custom row behind a create-cat
     movedId?: string       // the real category a cross-budget create-cat recreates
     targetDraft?: TargetDraft
-    zeroBudget?: boolean
     clearTarget?: boolean
   }
   dependsOn?: string
@@ -873,7 +874,7 @@ const SYNC_GROUP_META: Array<{ kind: SyncKind, name: string, hint: string }> = [
   { kind: 'rename', name: 'Rename category', hint: 'updates the name in YNAB' },
   { kind: 'create-group', name: 'Create group', hint: 'new category group in YNAB' },
   { kind: 'create-cat', name: 'Create category', hint: 'new category in YNAB' },
-  { kind: 'exclude', name: 'Exclude from plan', hint: 'assigns $0 and clears the target in YNAB' }
+  { kind: 'exclude', name: 'Exclude from plan', hint: 'removes the target in YNAB (assigned money is left alone)' }
 ]
 const SYNC_EXEC_ORDER: SyncKind[] = ['create-group', 'create-cat', 'move', 'rename', 'set-target', 'exclude']
 
@@ -1072,7 +1073,7 @@ const syncDerivation = computed(() => {
               exec: { name, movedId: category.id }
             })
           }
-          const offDetail = `moved to ${section.planName} — assigns ${fmt(0)} and clears the target in ${home.planName}`
+          const offDetail = `moved to ${section.planName} — removes the target in ${home.planName}`
           if (homePush) {
             actions.push({
               aid: `xoff-${category.id}`,
@@ -1080,11 +1081,7 @@ const syncDerivation = computed(() => {
               title: catName(category),
               detail: offDetail,
               sourceId: home.planId,
-              exec: {
-                categoryId: category.id,
-                zeroBudget: category.budgeted !== 0,
-                clearTarget: Boolean(category.goal_type)
-              }
+              exec: { categoryId: category.id, clearTarget: true }
             })
           } else {
             bump(home.planId)
@@ -1182,39 +1179,28 @@ const syncDerivation = computed(() => {
           }
         }
 
-        // Excluded = out of the plan in YNAB too: the month's assignment goes
-        // to $0 AND the target is cleared, so YNAB stops asking for it.
-        // Derives while either side still differs; after a push + re-sync the
-        // category carries no goal, drops out of Tinkrr, and derives nothing.
-        const excludedHasGoal = Boolean(category.goal_type)
-        if (isOff(category) && !isCustom(category) && (category.budgeted !== 0 || excludedHasGoal)) {
+        // Excluded = out of the plan in YNAB too: the target is removed, and
+        // that's all — assigned money is never touched. The row stays listed
+        // (unticked, no target) after the push, so the exclusion stays visible.
+        if (isOff(category) && !isCustom(category) && category.goal_type) {
+          const detail = `excluded — removes the ${goalLabel(category) || 'existing'} target`
           if (homePush) {
-            const parts = []
-            if (category.budgeted !== 0) parts.push(`assigns ${fmt(0)}`)
-            if (excludedHasGoal) parts.push(`clears the ${goalLabel(category) || 'existing'} target`)
             actions.push({
               aid: `off-${category.id}`,
               kind: 'exclude',
               title: catName(category),
-              detail: `excluded — ${parts.join(' and ')}`,
+              detail,
               sourceId: home.planId,
-              exec: {
-                categoryId: category.id,
-                zeroBudget: category.budgeted !== 0,
-                clearTarget: excludedHasGoal
-              }
+              exec: { categoryId: category.id, clearTarget: true }
             })
           } else {
             bump(home.planId)
-            const parts = []
-            if (category.budgeted !== 0) parts.push(`assigns ${fmt(0)}`)
-            if (excludedHasGoal) parts.push(`clears the ${goalLabel(category) || 'existing'} target`)
             actions.push({
               blocked: true,
               aid: `off-${category.id}`,
               kind: 'exclude',
               title: catName(category),
-              detail: `excluded — ${parts.join(' and ')}`,
+              detail,
               sourceId: home.planId,
               exec: { categoryId: category.id }
             })
@@ -1233,7 +1219,7 @@ const syncDerivation = computed(() => {
   const notes: string[] = []
   if (incomeDelta.value !== 0) notes.push(`your what-if income (${fmt(income.value)}) stays local — YNAB has no equivalent`)
   if (trashedReal) notes.push(`${trashedReal} trashed ${trashedReal === 1 ? 'row' : 'rows'} stay local — YNAB's API can't hide categories`)
-  if (crossBudget) notes.push(`${crossBudget} cross-budget ${crossBudget === 1 ? 'move' : 'moves'}: YNAB can't move a category between budgets, so it's created in the new budget and excluded (${fmt(0)} assigned, target cleared) in the old one — hide the leftover there by hand`)
+  if (crossBudget) notes.push(`${crossBudget} cross-budget ${crossBudget === 1 ? 'move' : 'moves'}: YNAB can't move a category between budgets, so it's created in the new budget and its target removed in the old one — hide the leftover there by hand`)
   if (unnamedCustom) notes.push(`${unnamedCustom} unnamed what-if ${unnamedCustom === 1 ? 'row' : 'rows'}`)
   const linkable: Array<{ planId: string, name: string, count: number }> = []
   for (const [planId, count] of blockedSources) {
@@ -1411,19 +1397,13 @@ async function doSync () {
   syncError.value = ''
   pushRows.value = picked.map(action => ({ aid: action.aid, title: action.title, st: 'pending' }))
 
-  // One request per action, two for updates that also move the goal; finalize
-  // rides on each source's last request so its snapshot refreshes server-side.
+  // One request per action; finalize rides on each source's last request so
+  // its snapshot refreshes server-side.
   type Req = { actionIndex: number, sourceId: string, body: Record<string, unknown> }
   const requests: Req[] = []
   for (let i = 0; i < picked.length; i++) {
     const action = picked[i]!
-    if (action.kind === 'exclude') {
-      // Assignment first, then the target clear — each its own API call.
-      if (action.exec.zeroBudget) requests.push({ actionIndex: i, sourceId: action.sourceId, body: { kind: 'exclude-zero' } })
-      if (action.exec.clearTarget) requests.push({ actionIndex: i, sourceId: action.sourceId, body: { kind: 'exclude-clear' } })
-      continue
-    }
-    requests.push({ actionIndex: i, sourceId: action.sourceId, body: { kind: action.kind } })
+    requests.push({ actionIndex: i, sourceId: action.sourceId, body: { kind: action.kind === 'exclude' ? 'exclude-clear' : action.kind } })
   }
   const lastReqBySource = new Map<string, number>()
   requests.forEach((req, index) => lastReqBySource.set(req.sourceId, index))
@@ -1482,9 +1462,6 @@ async function doSync () {
           }
           break
         }
-        case 'exclude-zero':
-          body = { kind: 'update', categoryId: action.exec.categoryId, budgeted: 0 }
-          break
         case 'exclude-clear':
           body = { kind: 'set-target', categoryId: action.exec.categoryId, goalTarget: null }
           break
@@ -2169,7 +2146,7 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
           </div>
 
           <p v-if="!loading && hasAnyDetail && !visibleCategories.length" class="table-note">
-            No categories with goals in the selected budgets this month. Add goals in YNAB and they'll show up here.
+            No categories in the selected budgets this month.
           </p>
           <p v-else-if="!anyMatch && (filterActive || chip !== 'All')" class="table-note">
             <template v-if="filterActive">No categories match “{{ filter.trim() }}”.</template>
@@ -2343,7 +2320,7 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
           >
         </div>
         <div class="scen-row">
-          <span class="scen-label">Required · {{ includedCount }} of {{ goalCount }} goals</span>
+          <span class="scen-label">Required · {{ includedCount }} of {{ goalCount }} categories</span>
           <b class="scen-val">{{ fmt(requiredTotal) }}</b>
         </div>
         <div class="scen-total">
