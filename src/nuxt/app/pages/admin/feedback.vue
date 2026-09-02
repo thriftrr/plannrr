@@ -212,7 +212,19 @@ h1 { font-size: 26px; margin: 0; }
 .sure { font-size: 12.5px; font-weight: 700; color: var(--danger); }
 .small { padding: 7px 14px; font-size: 12.5px; }
 
-@media (max-width: 700px) {
-  .page { padding: 24px 18px 48px; }
+@media (max-width: 759px) {
+  .page { padding: 16px 16px 40px; max-width: none; width: 100%; }
+  .top { gap: 8px; }
+  .filters { margin-left: 0; flex-wrap: wrap; flex-basis: 100%; }
+  .chip { min-height: 40px; padding: 8px 14px; }
+  .reload { margin-left: 0; width: 100%; }
+  .card { padding: 16px 14px; }
+  .meta { margin-left: 0; flex-basis: 100%; }
+  .meta code { max-width: 100%; }
+  .card-foot { flex-direction: column; align-items: stretch; }
+  .ua { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+  .acts { margin-left: 0; flex-wrap: wrap; }
+  .acts > button { flex: 1 1 auto; min-height: 44px; }
+  .small { padding: 10px 14px; }
 }
 </style>

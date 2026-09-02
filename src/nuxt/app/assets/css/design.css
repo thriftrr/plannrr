@@ -213,6 +213,12 @@ a:hover { color: var(--teal-dark); }
 
 input, button, select, textarea { font-family: var(--font); }
 
+/* Safari draws search fields and buttons in its own style unless told not
+   to; the app styles them itself. */
+input[type="search"], input[type="text"], input[type="email"], input[type="password"], textarea, button { -webkit-appearance: none; appearance: none; }
+input[type="search"]::-webkit-search-decoration, input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
+input[type="checkbox"] { -webkit-appearance: checkbox; appearance: auto; }
+
 /* Phones: 16px inputs keep iOS Safari from zooming the page on focus, and
    every primary control clears the 44px touch target. */
 @media (max-width: 759px) {

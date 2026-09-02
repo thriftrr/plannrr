@@ -66,6 +66,12 @@ async function send () {
 function onKey (e: KeyboardEvent) {
   if (e.key === 'Escape' && open.value) close()
 }
+// Sheet on phones: keep the page from scrolling behind it.
+watch(open, (isOpen) => {
+  if (!import.meta.client) return
+  document.body.style.overflow = isOpen ? 'hidden' : ''
+})
+onUnmounted(() => { if (import.meta.client) document.body.style.overflow = '' })
 onMounted(() => document.addEventListener('keydown', onKey))
 onUnmounted(() => document.removeEventListener('keydown', onKey))
 </script>
@@ -174,7 +180,9 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
   width: 600px;
   max-width: 100%;
   max-height: 90vh;
+  max-height: 90dvh;
   overflow: auto;
+  -webkit-overflow-scrolling: touch;
   background: var(--bg-card);
   border-radius: var(--r-panel);
   padding: 24px;
@@ -241,4 +249,18 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
   font-size: 14px;
 }
 .fb-thanks-big { font-size: 22px; font-weight: 800; margin-bottom: 4px; }
+
+@media (max-width: 759px) {
+  .fb-overlay { padding: 0; align-items: flex-end; }
+  .fb-modal {
+    width: 100%;
+    max-height: 94vh;
+    max-height: 94dvh;
+    border-radius: var(--r-panel) var(--r-panel) 0 0;
+    padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
+  }
+  .fb-x { width: 44px; height: 44px; display: grid; place-items: center; margin-top: -8px; margin-right: -8px; }
+  .fb-actions { flex-direction: column-reverse; }
+  .fb-actions > * { width: 100%; min-height: 44px; }
+}
 </style>

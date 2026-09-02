@@ -313,7 +313,7 @@ function startBlank () {
 
     <p class="lede">
       Every debt taken on and paid off, in order, with the running total after
-      each event. It's your story — hover between cards to add a moment, click
+      each event. It's your story — use the + between cards to add a moment, tap
       ✎ to edit any card, and leave yourself a note about what was really going on.
     </p>
 
@@ -375,7 +375,7 @@ function startBlank () {
               @mouseenter="hoverGap = i"
               @mouseleave="hoverGap = null"
             >
-              <button v-if="hoverGap === i" class="insert" @click="insertAt(i)">+ Add a moment here</button>
+              <button class="insert" :class="{ quiet: hoverGap !== i }" @click="insertAt(i)">+ Add a moment here</button>
             </div>
             <div class="entry">
               <div class="dot" :style="{ background: KIND_META[row.ev.kind].dot }" />
@@ -445,7 +445,7 @@ function startBlank () {
             @mouseenter="hoverGap = events.length"
             @mouseleave="hoverGap = null"
           >
-            <button v-if="hoverGap === events.length" class="insert" @click="insertAt(events.length)">+ Add a moment here</button>
+            <button class="insert" :class="{ quiet: hoverGap !== events.length }" @click="insertAt(events.length)">+ Add a moment here</button>
           </div>
         </div>
       </div>
@@ -589,6 +589,10 @@ h1 { font-size: 26px; }
   height: 14px;
 }
 .gap.active { height: 38px; }
+/* Pointer devices reveal the insert on hover; touch devices always show it
+   (muted) — there is no hover to find it with. */
+@media (hover: hover) { .insert.quiet { display: none; } }
+@media (hover: none) { .gap { height: 40px; } .insert.quiet { border-color: var(--border-input); background: var(--bg-card); color: var(--fg-subtle); } }
 .insert {
   display: flex;
   align-items: center;
@@ -786,5 +790,32 @@ h1 { font-size: 26px; }
 @media (max-width: 700px) {
   .page { padding: 24px 18px 48px; }
   .edit-grid { grid-template-columns: 1fr 1fr; }
+}
+
+/* ---- Phones ---- */
+@media (max-width: 759px) {
+  .page { padding: 16px 16px 40px; }
+  .top { gap: 6px 12px; }
+  .top h1 { font-size: 22px; }
+  .top-actions { margin-left: 0; width: 100%; }
+  .top-actions > * { flex: 1; }
+  .chips .chip { min-height: 36px; }
+  .timeline { padding-left: 20px; }
+  .rail-line { left: 5px; }
+  .dot { left: -20px; }
+  .gap.active { height: 40px; }
+  .insert { min-height: 36px; }
+  .card { padding: 12px 12px; }
+  .date { width: auto; }
+  .title { flex: 1 1 100%; order: 3; }
+  .note { padding-left: 0; }
+  .pen { width: 44px; height: 44px; margin: -10px -12px -10px 0; color: var(--teal-dark); }
+  .edit-grid { grid-template-columns: 1fr; }
+  .edit-actions { flex-wrap: wrap; }
+  .today { margin-left: 20px; flex-wrap: wrap; gap: 4px 12px; }
+  .empty-actions { flex-direction: column; }
+  .empty-actions > * { width: 100%; }
+  .overlay { padding: 12px; align-items: flex-end; }
+  .modal { padding: 16px; max-height: 92vh; max-height: 92dvh; border-radius: 16px; }
 }
 </style>

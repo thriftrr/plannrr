@@ -55,6 +55,23 @@ const SYNC_PLANS_KEY = 'ynabrr:debt:sync-plans'
 const debts = ref<DebtRecord[]>([])
 const isMock = ref(false)
 const loading = ref(true)
+// A panel (edit / refinance / order) locks the document behind it — on
+// phones the panel is a sheet over a scrolling page, so this matters.
+// Registered after mount: the refs it reads are declared further down.
+onMounted(() => {
+  watch(() => Boolean(editing.value || refi.value || orderModalOpen.value), (open) => {
+    document.body.style.overflow = open ? 'hidden' : ''
+  })
+})
+onUnmounted(() => { if (import.meta.client) document.body.style.overflow = '' })
+
+// Share of the original amount already paid — the little progress bar on
+// phone loan cards.
+const paidShare = (loan: LoanRow) => {
+  const original = Math.abs(loan.startBalance)
+  if (!original) return 0
+  return Math.min(Math.max(loan.paidIn / original, 0), 1)
+}
 const lastSynced = ref<string | null>(null)
 const extras = ref<Record<string, number>>({})
 const settings = ref<DebtSettings>({ strategy: 'minimum', snowball: 0, extra: 0, customOrder: [] })
@@ -1296,6 +1313,39 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
         </p>
       </section>
 
+      <section class="loan-cards">
+        <article v-for="loan in loans" :key="loan.id" class="loan-card" :class="{ off: loan.hidden }">
+          <div class="lc-head">
+            <input type="checkbox" class="lc-check" :checked="!loan.hidden" :aria-label="`Include ${loan.name}`" @change="patchRow(loan, { hidden: !loan.hidden })">
+            <span class="chip" :style="{ background: loan.color }" />
+            <div class="lc-who">
+              <div class="lc-name">{{ loan.name }}<span v-if="loan.hasOverride" class="override-mark" title="Adjusted by you — sync keeps it">*</span></div>
+              <div class="lc-plan">{{ loan.source === 'manual' ? 'manual' : loan.planName }}<template v-if="loan.startDate"> · since {{ dateLabel(loan.startDate) }}</template></div>
+            </div>
+            <div class="lc-balance" :class="{ paid: loan.balance >= 0 }">{{ loan.balance < 0 ? fmt(-loan.balance) : 'Paid ✓' }}</div>
+          </div>
+          <div class="lc-bar" :title="`${Math.round(paidShare(loan) * 100)}% paid`"><div class="lc-fill" :style="{ width: `${paidShare(loan) * 100}%`, background: loan.color }" /></div>
+          <div class="lc-grid">
+            <div>Original <b>{{ fmt(-loan.startBalance) }}</b></div>
+            <div>Paid in <b>{{ fmt(loan.paidIn) }}<span v-if="reconcileState(loan) === 'error'" class="recon-error" title="Doesn't add up — edit this row to fix">⚠</span></b></div>
+            <div>APR <b>{{ loan.balance < 0 && loan.rate ? `${loan.rate}%` : '—' }}</b></div>
+            <div>Monthly <b class="teal"><template v-if="loan.balance < 0">{{ fmt(paymentFor(loan)) }}<span v-if="extras[loan.id]" class="extra-tag">+{{ fmt(extras[loan.id]!) }}</span></template><template v-else>—</template></b></div>
+            <div>Payoff <b>
+              <template v-if="loan.balance >= 0">{{ loan.endDate ? dateLabel(loan.endDate) : 'Paid' }} 🏆</template>
+              <template v-else-if="loan.hidden">—</template>
+              <template v-else-if="projections.get(loan.id)?.payoffMonth">{{ dateLabel(projections.get(loan.id)!.payoffMonth!) }}</template>
+              <template v-else>never at this rate</template>
+            </b></div>
+            <div>Interest left <b>{{ loan.balance < 0 && !loan.hidden && projections.get(loan.id)?.payoffMonth ? fmt(projections.get(loan.id)!.interestTotal) : '—' }}</b></div>
+          </div>
+          <div class="lc-actions">
+            <button class="lc-btn" @click="openEditor(loan)">✎ Edit</button>
+            <button v-if="loan.balance < 0" class="lc-btn" @click="openRefi(loan)">⇄ Refinance</button>
+            <button v-if="loan.source === 'manual' && !isMock" class="lc-btn danger" @click="removeRow(loan)">✕ Delete</button>
+          </div>
+        </article>
+      </section>
+
       <section class="table-card">
         <table>
           <thead>
@@ -2057,6 +2107,7 @@ td.actions { white-space: nowrap; text-align: right; }
 .flyout {
   width: min(480px, 100%);
   height: 100vh;
+  height: 100dvh;
   background: var(--bg-card);
   border-left: 1.5px solid var(--border);
   box-shadow: -12px 0 32px rgba(43, 42, 38, 0.18);
@@ -2305,5 +2356,107 @@ td.actions { white-space: nowrap; text-align: right; }
   .page { padding: 28px 20px 60px; }
   .plan-name { display: none; }
   td.quiet, td.payoff { font-size: 11px; }
+}
+
+/* ---- Tablet: sidebar is an icon rail, keep the table breathing ---- */
+@media (max-width: 1099px) {
+  thead th, td { padding-left: 6px; padding-right: 6px; }
+  .flyout { width: min(440px, 100%); }
+}
+
+/* ---- Phone loan cards (the table is replaced under 760px) ---- */
+.loan-cards { display: none; margin-top: 16px; flex-direction: column; gap: 10px; }
+.loan-card {
+  background: var(--bg-card);
+  border: 1.5px solid var(--border);
+  border-radius: var(--r-card);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.loan-card.off { opacity: 0.55; }
+.lc-head { display: flex; align-items: center; gap: 10px; }
+.lc-check { width: 22px; height: 22px; accent-color: var(--teal); flex: none; margin: 0; }
+.lc-who { flex: 1; min-width: 0; }
+.lc-name { font-size: 15px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lc-plan { font-size: 11px; color: var(--fg-faint); }
+.lc-balance { font-size: 16px; font-weight: 800; font-variant-numeric: tabular-nums; flex: none; }
+.lc-balance.paid { color: var(--ok); }
+.lc-bar { height: 6px; border-radius: 999px; background: var(--neutral-bg); overflow: hidden; }
+.lc-fill { height: 100%; border-radius: 999px; }
+.lc-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px 8px;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+}
+.lc-grid b { display: block; color: var(--fg); font-variant-numeric: tabular-nums; }
+.lc-grid b.teal { color: var(--teal-dark); }
+.lc-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.lc-btn {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1.5px solid var(--border-input);
+  border-radius: var(--r-xs);
+  background: var(--bg-card);
+  color: var(--teal-dark);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.lc-btn.danger { color: var(--danger); margin-left: auto; }
+
+@media (max-width: 759px) {
+  .loan-cards { display: flex; }
+  .table-card { display: none; }
+  .page { padding: 16px 16px 40px; max-width: none; }
+  .title-row { gap: 8px 12px; }
+  .title-row h1 { font-size: 22px; }
+  .top-actions { margin-left: 0; width: 100%; }
+  .top-actions > * { flex: 1; }
+  .sync-bar { gap: 8px 10px; }
+  .sync-bar .primary { min-height: 44px; }
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .stats article { padding: 12px 12px; }
+  .stats p { font-size: 19px; }
+  /* strategies: one snap-scrolling row */
+  .strategies {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x mandatory;
+    scroll-padding: 0 16px;
+    margin: 14px -16px 0;
+    padding: 2px 16px 6px;
+  }
+  .strategy-card { flex: 0 0 156px; scroll-snap-align: start; min-height: 44px; }
+  .strategy-bar { gap: 10px 14px; }
+  .pool-field input { min-height: 40px; }
+  .chart-card { padding: 12px 10px 14px; }
+  .tooltip { min-width: 0; max-width: 60%; font-size: 11px; }
+  .payoff-strip { font-size: 12.5px; }
+  .manage .add-form input { min-height: 44px; }
+  /* side panels become bottom sheets */
+  .flyout-backdrop { align-items: flex-end; justify-content: stretch; }
+  .flyout {
+    width: 100%;
+    height: auto;
+    max-height: 92vh;
+    max-height: 92dvh;
+    border-left: none;
+    border-top: 1.5px solid var(--border);
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -8px 28px rgba(43, 42, 38, 0.2);
+    padding: 14px 16px calc(18px + env(safe-area-inset-bottom));
+    -webkit-overflow-scrolling: touch;
+  }
+  .flyout-head { position: sticky; top: -14px; background: var(--bg-card); padding: 4px 0 6px; z-index: 1; }
+  .reset { width: 44px; height: 44px; margin: -10px -12px -10px 0; display: grid; place-items: center; }
+  .overlay { padding: 12px; align-items: flex-end; }
+  .modal { padding: 16px; max-height: 92vh; max-height: 92dvh; border-radius: 16px; }
 }
 </style>

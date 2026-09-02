@@ -139,6 +139,11 @@ const tools: Tool[] = [
   font-size: 14px;
   pointer-events: none;
 }
+@media (max-width: 759px) {
+  .fb-tool { min-width: 40px; height: 40px; }
+  .fb-hint { flex-basis: 100%; margin-left: 0; }
+  .fb-placeholder { font-size: 16px; }
+}
 </style>
 
 <style>
@@ -147,6 +152,7 @@ const tools: Tool[] = [
   min-height: 160px;
   padding: 12px 14px;
   font-size: 14px;
+  -webkit-overflow-scrolling: touch;
   line-height: 1.55;
   color: var(--fg);
   outline: none;
@@ -180,5 +186,8 @@ const tools: Tool[] = [
   padding-left: 12px;
   border-left: 3px solid var(--teal-border);
   color: var(--fg-muted);
+}
+@media (max-width: 759px) {
+  .fb-editor-body { font-size: 16px; }
 }
 </style>

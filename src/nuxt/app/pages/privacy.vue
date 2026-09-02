@@ -87,5 +87,12 @@ h2 { margin: 22px 0 6px; font-size: 14.5px; font-weight: 800; }
 ul { margin: 6px 0 0; padding-left: 18px; }
 li { margin: 6px 0; font-size: 13.5px; line-height: 1.55; color: var(--fg-muted); }
 li b { color: var(--fg); }
-.back { display: inline-block; margin-top: 18px; }
+.back { display: inline-block; margin-top: 18px; padding: 10px 0; }
+
+@media (max-width: 759px) {
+  .wrap { gap: 14px; }
+  .panel { padding: 20px 16px; border-radius: var(--r-card); }
+  h1 { font-size: 22px; }
+  li, .y-body { font-size: 14px; }
+}
 </style>

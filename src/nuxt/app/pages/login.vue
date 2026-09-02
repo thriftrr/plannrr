@@ -124,4 +124,10 @@ form {
 .dev-url { word-break: break-all; font-weight: 700; }
 
 .back { margin-top: 14px; }
+
+@media (max-width: 759px) {
+  .wrap { width: 100%; }
+  .panel { width: 100%; margin-top: 22px; padding: 22px 18px; }
+  .send { min-height: 44px; }
+}
 </style>

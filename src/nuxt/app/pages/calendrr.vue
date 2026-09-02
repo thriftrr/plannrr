@@ -983,7 +983,7 @@ const confidencePill: Record<string, { label: string, tone: string }> = {
       </div>
     </div>
 
-    <PageFooter />
+    <PageFooter class="desk-foot" />
   </main>
 
   <SideRail v-slot="{ wide }" storage-key="ynabrr:calendar-panel" expandable>
@@ -1213,6 +1213,7 @@ const confidencePill: Record<string, { label: string, tone: string }> = {
 
     </div>
   </SideRail>
+  <PageFooter phone />
 </template>
 
 <style scoped>
@@ -1608,5 +1609,46 @@ const confidencePill: Record<string, { label: string, tone: string }> = {
   .page { padding: 20px 16px 48px; }
   .cell { min-height: 64px; }
   .chip, .bal { display: none; }
+}
+
+/* ==== phone (<760px): compact month strip with event dots; the panel
+   (selected day, this month, planned) renders inline below ==== */
+@media (max-width: 759px) {
+  .page { padding: 12px 14px 20px; }
+  .desk-foot { display: none; }
+  .top { gap: 10px; }
+  .legend { display: none; }
+  .cal { margin-top: 12px; }
+  .dow { padding: 7px 0; font-size: 10px; letter-spacing: 0.4px; }
+  .cell {
+    min-height: 48px;
+    padding: 4px 2px 5px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    overflow: visible;
+  }
+  .cell-head { justify-content: center; }
+  .num { font-size: 13.5px; }
+  .num.today { width: 26px; height: 26px; }
+  .bal { display: none; }
+  .chip, .chip.bundle {
+    display: block;
+    width: 6px;
+    height: 6px;
+    padding: 0;
+    border: none;
+    border-radius: 999px;
+    font-size: 0;
+    line-height: 0;
+    background: var(--danger);
+    opacity: 1;
+  }
+  .chip.income { background: var(--ok-dot); }
+  .chip.goal { background: var(--teal); }
+  .chip.projected { opacity: 0.55; }
+  .chip.bundle { background: var(--border-strong); }
+  .cell.selected { background: var(--teal-bg); }
 }
 </style>

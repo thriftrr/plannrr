@@ -883,6 +883,40 @@ h1 { font-size: 26px; }
   .profile-body { flex-direction: column; }
   .grid { grid-template-columns: 1fr; }
 }
+@media (max-width: 759px) {
+  .page { padding: 16px 16px 40px; max-width: none; width: 100%; }
+  h1 { font-size: 24px; }
+  .who { flex-basis: 100%; }
+  .out { margin-left: 0; }
+  .y-card { padding: 18px 16px; }
+  .profile-body { align-items: stretch; }
+  .avatar-col { flex-direction: row; justify-content: flex-start; gap: 14px; }
+  .avatar { width: 64px; height: 64px; }
+  .actions .save { margin-left: 0; width: 100%; }
+  .actions > * { flex: 1 1 auto; }
+  .row { gap: 8px; }
+  .row > * { flex: 1 1 100%; }
+  .row .grow { min-width: 0; }
+  .row .push { margin-left: 0; }
+  .row .cur-select { width: 100%; }
+  .row input[type="file"] { max-width: 100%; }
+  .head-row { flex-wrap: wrap; }
+  .new-budget { margin-left: 0; width: 100%; }
+  .palettes { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .swatch { min-height: 44px; }
+  .picker { padding: 12px; margin-left: -2px; margin-right: -2px; }
+  .picker-row { min-height: 44px; padding: 6px 8px; }
+  .picker-row input { width: 20px; height: 20px; }
+  .picker-cur { margin-left: 0; }
+  .picker-actions > * { flex: 1 1 auto; }
+  .source-row { padding: 12px 0; row-gap: 8px; }
+  .source-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .source-meta { flex-basis: 100%; margin-right: 0; }
+  .source-row > button { flex: 1 1 auto; }
+  .confirm-note { flex-basis: 100%; }
+  .oauth-btn { justify-content: center; }
+  .open { display: block; text-align: center; padding: 12px 0; }
+}
 .oauth-btn { text-decoration: none; display: inline-flex; align-items: center; }
 .danger-card { border-color: var(--danger-bg); }
 </style>

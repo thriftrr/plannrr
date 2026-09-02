@@ -38,4 +38,9 @@ const label = computed(() => {
 }
 .stepper button:disabled { color: var(--border-input); cursor: default; }
 .label { font-weight: 800; font-size: 19px; padding: 0 6px; white-space: nowrap; }
+@media (max-width: 759px) {
+  .stepper { width: 100%; justify-content: space-between; }
+  .stepper button { width: 44px; height: 44px; font-size: 18px; }
+  .label { flex: 1; text-align: center; }
+}
 </style>

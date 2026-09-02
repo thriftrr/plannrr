@@ -373,4 +373,18 @@ h1 { font-size: 30px; }
   .page { padding: 32px 24px; }
   .tiles { grid-template-columns: 1fr; }
 }
+@media (max-width: 759px) {
+  .page { padding: 20px 16px 32px; max-width: none; width: 100%; }
+  h1 { font-size: 26px; }
+  .lede { font-size: 14.5px; }
+  .tiles { margin-top: 20px; gap: 12px; }
+  .setup-head > div:first-child { min-width: 0; flex-basis: 100%; }
+  .setup-meter { width: 100%; }
+  .setup-step { padding: 12px; }
+  .setup-cta { display: flex; width: 100%; justify-content: center; }
+  .setup-foot > * { flex: 1 1 100%; }
+  .tip { flex-direction: column; align-items: stretch; text-align: center; }
+  .mug { display: none; }
+  .kofi { justify-content: center; min-height: 44px; }
+}
 </style>

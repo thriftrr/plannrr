@@ -96,4 +96,25 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
 .row input { width: 15px; height: 15px; accent-color: var(--teal); }
 .name { font-size: 13.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .note { padding: 6px 8px 2px; font-size: 11px; color: var(--fg-faint); }
+@media (max-width: 759px) {
+  .face { max-width: none; min-height: 44px; }
+  .pop {
+    position: fixed;
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+    width: auto;
+    max-height: 70vh;
+    max-height: 70dvh;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+    z-index: 45;
+    border-radius: 14px 14px 0 0;
+    padding: 10px 12px 14px;
+    box-shadow: 0 -6px 24px rgba(43, 42, 38, 0.18);
+  }
+  .row { min-height: 44px; }
+  .row input[type="checkbox"] { width: 20px; height: 20px; }
+}
 </style>

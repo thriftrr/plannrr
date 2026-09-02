@@ -2155,7 +2155,7 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
           </p>
         </section>
 
-        <PageFooter />
+        <PageFooter class="desk-foot" />
       </template>
     </main>
 
@@ -2439,6 +2439,7 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
         </button>
       </div>
     </SideRail>
+    <PageFooter phone />
   </div>
 </template>
 
@@ -3262,4 +3263,58 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
   cursor: pointer;
 }
 .phone-bar-sync:disabled { opacity: 0.45; cursor: default; }
+
+/* ==== phone (<760px): two-line rows, sheet for the scenario panel ==== */
+@media (max-width: 759px) {
+  .wrap { flex-direction: column; align-items: stretch; }
+  .page { padding: 12px 14px 0; }
+  .desk-foot { display: none; }
+  .wrap > .foot.phone-only { padding-bottom: 120px; }
+  .top { gap: 10px; }
+  .hero { flex: 1; padding: 6px 12px; }
+  .head-right { width: 100%; }
+  .filter { flex: 1; width: auto; min-height: 44px; }
+  .help-btn { width: 44px; height: 44px; }
+  .chips { flex-wrap: wrap; }
+  .chip { min-height: 36px; }
+  .table-card { overflow-x: hidden; }
+  .grid {
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "name name" "goal input" "goal diff";
+    gap: 2px 10px;
+    padding: 10px 12px;
+    align-items: center;
+  }
+  .grid > :nth-child(1) { grid-area: name; min-width: 0; }
+  .grid > :nth-child(2) { grid-area: goal; align-self: start; padding-top: 6px; }
+  .grid > :nth-child(3) { grid-area: input; }
+  .grid > :nth-child(4) { grid-area: diff; text-align: right; }
+  .head-row > :nth-child(2), .head-row > :nth-child(4) { display: none; }
+  .head-row { grid-template-areas: "name input"; grid-template-columns: minmax(0, 1fr) auto; }
+  .plan-row, .group-row { grid-template-areas: "name name" "goal input" "goal diff"; }
+  .group-row > :nth-child(3), .plan-row > :nth-child(3) { font-size: 14px; }
+  .row .goal-cell .goal-raw::before { content: "YNAB · "; }
+  .goal-cell { flex-direction: row; flex-wrap: wrap; gap: 0 6px; font-size: 12px; }
+  .goal-raw { white-space: normal; overflow: visible; }
+  .cell-name .check { width: 22px; height: 22px; }
+  .drag { width: 24px; }
+  .amount { width: 96px; min-height: 40px; font-size: 16px; }
+  .shape-btn, .mini-act { width: 36px; height: 36px; }
+  .mini-act { font-size: 16px; }
+  .target-pop { width: min(300px, calc(100vw - 40px)); }
+  .add-budget-row { flex-wrap: wrap; }
+  .add-budget-name { flex: 1 1 100%; min-height: 44px; }
+  .add-cat, .add-group { min-height: 44px; }
+  /* sync review as a bottom sheet */
+  .sync-overlay { align-items: flex-end; padding: 0; }
+  .sync-card {
+    width: 100%;
+    max-height: 92vh;
+    max-height: 92dvh;
+    border-radius: var(--r-panel) var(--r-panel) 0 0;
+    padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
+    -webkit-overflow-scrolling: touch;
+  }
+}
 </style>

@@ -10,8 +10,15 @@
 //                        the panel as a bottom sheet
 const props = defineProps<{ storageKey: string, expandable?: boolean, phone?: 'inline' | 'sheet' }>()
 const { isTablet } = useViewport()
+// The server always renders the desktop rail; switching branches during
+// hydration would leave Vue patching a mismatched <aside>. So the compact
+// modes engage only after mount — the desktop rail is hidden by CSS under
+// 1100px anyway, so nothing flashes.
+const mounted = ref(false)
+onMounted(() => { mounted.value = true })
+const compact = computed(() => mounted.value && isTablet.value)
 const sheetOpen = ref(false)
-watch(isTablet, (compact) => { if (!compact) sheetOpen.value = false })
+watch(compact, (value) => { if (!value) sheetOpen.value = false })
 function onSheetKey (event: KeyboardEvent) { if (event.key === 'Escape') sheetOpen.value = false }
 watch(sheetOpen, (open) => {
   if (!import.meta.client) return
@@ -50,7 +57,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <template v-if="isTablet && phone === 'sheet'">
+  <template v-if="compact && phone === 'sheet'">
     <div class="sheet-bar" role="button" tabindex="0" aria-label="Open the panel" @click="sheetOpen = true" @keydown.enter="sheetOpen = true">
       <slot name="bar" />
     </div>
@@ -63,7 +70,7 @@ onMounted(() => {
       </div>
     </Teleport>
   </template>
-  <aside v-else-if="isTablet" class="rail inline">
+  <aside v-else-if="compact" class="rail inline">
     <div class="body"><slot :wide="false" /></div>
   </aside>
   <aside v-else class="rail" :class="{ closed: mode === 'closed', wide: mode === 'wide' }">

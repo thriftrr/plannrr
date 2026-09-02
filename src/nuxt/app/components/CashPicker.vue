@@ -351,4 +351,30 @@ function submitAdd () {
 }
 .add-cancel { border: none; background: none; color: var(--fg-subtle); font-weight: 700; font-size: 12.5px; cursor: pointer; }
 .note { padding: 8px 8px 2px; font-size: 11px; color: var(--fg-faint); line-height: 1.4; }
+@media (max-width: 759px) {
+  .face { max-width: none; min-height: 44px; }
+  .pop {
+    position: fixed;
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+    width: auto;
+    max-height: 70vh;
+    max-height: 70dvh;
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+    z-index: 45;
+    border-radius: 14px 14px 0 0;
+    padding: 10px 12px 14px;
+    box-shadow: 0 -6px 24px rgba(43, 42, 38, 0.18);
+  }
+  .row { min-height: 44px; }
+  .row input[type="checkbox"] { width: 20px; height: 20px; }
+  .amt input { min-height: 40px; width: 110px; }
+  .mini { width: 32px; min-height: 40px; }
+  .add { min-height: 44px; }
+  .add-form input, .add-form select { min-height: 44px; }
+  .add-go, .add-cancel { min-height: 44px; }
+}
 </style>

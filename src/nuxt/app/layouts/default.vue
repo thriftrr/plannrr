@@ -24,6 +24,11 @@ useViewport()
   min-height: 100vh;
   min-height: 100dvh;
 }
+/* Tablets: an inline panel (SideRail under 1100px) is 100% wide, so let the
+   row wrap and it lands beneath the page instead of beside it. */
+@media (max-width: 1099px) {
+  .app { flex-wrap: wrap; }
+}
 @media (max-width: 759px) {
   .app {
     flex-direction: column;
