@@ -126,24 +126,25 @@ export async function getTransactionsForPlan (event: H3Event, planId: string): P
   transactions: BudgetTransaction[]
   balance_now: number | null
   accounts: BudgetAccount[]
+  accounts_at: string | null
 }> {
   const { ynabMock } = useRuntimeConfig()
   if (ynabMock) {
     const res = resolveYnabMock(`/plans/${planId}/transactions`) as { transactions?: BudgetTransaction[], balance_now?: number | null, accounts?: BudgetAccount[] }
-    return { transactions: res.transactions ?? [], balance_now: res.balance_now ?? null, accounts: res.accounts ?? [] }
+    return { transactions: res.transactions ?? [], balance_now: res.balance_now ?? null, accounts: res.accounts ?? [], accounts_at: new Date().toISOString() }
   }
   if (isSourcePlanId(planId)) {
     const snapshot = await loadSourceSnapshot(event, planId)
-    return { transactions: snapshot.transactions ?? [], balance_now: snapshot.accountBalanceNow ?? null, accounts: snapshot.accounts ?? [] }
+    return { transactions: snapshot.transactions ?? [], balance_now: snapshot.accountBalanceNow ?? null, accounts: snapshot.accounts ?? [], accounts_at: snapshot.accountsAt ?? snapshot.syncedAt ?? null }
   }
   if (isImportedPlanId(planId)) {
     const parsed = await loadImport(event, planId)
     // Zip registers are complete history, so their net IS the balance.
     const transactions = parsed.transactions ?? []
     const balance = transactions.length ? transactions.reduce((sum, txn) => sum + txn.amount, 0) : null
-    return { transactions, balance_now: balance, accounts: [] }
+    return { transactions, balance_now: balance, accounts: [], accounts_at: null }
   }
-  return { transactions: [], balance_now: null, accounts: [] }
+  return { transactions: [], balance_now: null, accounts: [], accounts_at: null }
 }
 
 export { IMPORT_PREFIX, importKey }

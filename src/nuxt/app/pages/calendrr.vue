@@ -29,7 +29,8 @@ type DayEvent = {
 
 const monthsByPlan = ref<Record<string, MonthSummary[]>>({})
 const schedByPlan = ref<Record<string, ScheduledTransaction[]>>({})
-const txnsByPlan = ref<Record<string, { transactions: BudgetTransaction[], balance_now: number | null, accounts: BudgetAccount[] }>>({})
+type TxnBundle = { transactions: BudgetTransaction[], balance_now: number | null, accounts: BudgetAccount[], accounts_at: string | null }
+const txnsByPlan = ref<Record<string, TxnBundle>>({})
 const prefsByPlan = ref<Record<string, RecurringPrefs>>({})
 const kindByPlan = ref<Record<string, string>>({})
 const detailCache = new Map<string, MonthDetail | null>()
@@ -91,13 +92,39 @@ async function loadTransactions () {
   const missing = selectedIds.value.filter(id => !txnsByPlan.value[id])
   await Promise.all(missing.map(async (id) => {
     try {
-      const data = await $fetch<{ transactions: BudgetTransaction[], balance_now: number | null, accounts?: BudgetAccount[] }>(`/api/ynab/${id}/transactions`)
-      txnsByPlan.value[id] = { ...data, accounts: data.accounts ?? [] }
+      const data = await $fetch<Partial<TxnBundle> & { transactions: BudgetTransaction[] }>(`/api/ynab/${id}/transactions`)
+      txnsByPlan.value[id] = { transactions: data.transactions, balance_now: data.balance_now ?? null, accounts: data.accounts ?? [], accounts_at: data.accounts_at ?? null }
     } catch {
-      txnsByPlan.value[id] = { transactions: [], balance_now: null, accounts: [] }
+      txnsByPlan.value[id] = { transactions: [], balance_now: null, accounts: [], accounts_at: null }
     }
   }))
 }
+
+// Live balances: one YNAB call per synced budget, so "cash on hand" is what
+// the accounts hold right now rather than at the last full sync. Runs on
+// every visit (throttled server-side) and from the picker's Refresh.
+const accountsRefreshing = ref(false)
+const accountsError = ref('')
+async function refreshAccounts (ids = selectedIds.value.filter(id => kindByPlan.value[id] === 'synced' || id.startsWith('mock-'))) {
+  if (!ids.length || accountsRefreshing.value) return
+  accountsRefreshing.value = true
+  accountsError.value = ''
+  await Promise.all(ids.map(async (id) => {
+    try {
+      const data = await $fetch<{ accounts: BudgetAccount[], accounts_at: string }>(`/api/ynab/${id}/accounts`, { method: 'POST' })
+      const bundle = txnsByPlan.value[id] ?? { transactions: [], balance_now: null, accounts: [], accounts_at: null }
+      txnsByPlan.value[id] = { ...bundle, accounts: data.accounts, balance_now: data.accounts.reduce((sum, a) => sum + a.balance, 0), accounts_at: data.accounts_at }
+    } catch (cause: unknown) {
+      const err = cause as { data?: { statusMessage?: string } }
+      accountsError.value = err.data?.statusMessage ?? 'Could not reach YNAB for live balances — showing the last synced ones.'
+    }
+  }))
+  accountsRefreshing.value = false
+}
+const accountsAt = computed(() => {
+  const stamps = selectedIds.value.map(id => txnsByPlan.value[id]?.accounts_at).filter((s): s is string => Boolean(s))
+  return stamps.length ? stamps.sort()[0]! : null
+})
 
 async function loadPrefs () {
   const missing = selectedIds.value.filter(id => !prefsByPlan.value[id])
@@ -150,6 +177,7 @@ onMounted(async () => {
     }
     await Promise.all([loadMonths(), loadScheduled(), loadTransactions(), loadPrefs(), loadSourceKinds()])
     await loadDetails()
+    refreshAccounts()
     try {
       const data = await $fetch<{ debts: Array<{ name: string, balance: number, hidden: boolean, history: unknown[] }> }>('/api/debt')
       debts.value = data.debts.filter(d => !d.hidden && d.history.length > 0)
@@ -163,6 +191,7 @@ onMounted(async () => {
 watch(selectedIds, async () => {
   await Promise.all([loadMonths(), loadScheduled(), loadTransactions(), loadPrefs()])
   await loadDetails()
+  refreshAccounts(selectedIds.value.filter(id => (kindByPlan.value[id] === 'synced' || id.startsWith('mock-')) && !txnsByPlan.value[id]?.accounts.length))
 })
 watch(month, loadDetails)
 
@@ -416,13 +445,16 @@ const mornings = computed(() => {
   if (!month.value) return null
   const sources = selectedIds.value.map((id) => {
     const cash = cashBySource.value.get(id)
-    const transactions = txnsByPlan.value[id]?.transactions ?? []
+    const bundle = txnsByPlan.value[id]
+    const transactions = bundle?.transactions ?? []
+    // Counted accounts win over the sync-time sum. They're true as of the
+    // moment YNAB reported them (or today, for hand-typed ones), which is
+    // usually later than the register's last entry.
+    const readAt = bundle?.accounts_at ? bundle.accounts_at.slice(0, 10) : todayIso
     return {
       transactions,
-      // Counted accounts win over the sync-time sum; with no register to
-      // anchor them, they're true as of today.
-      balanceNow: cash ?? txnsByPlan.value[id]?.balance_now ?? null,
-      anchorDate: cash !== undefined && !transactions.length ? todayIso : undefined,
+      balanceNow: cash ?? bundle?.balance_now ?? null,
+      anchorDate: cash !== undefined ? (readAt > todayIso ? todayIso : readAt) : undefined,
       startingBalance: prefsByPlan.value[id]?.startingBalance ?? null,
       completeHistory: kindByPlan.value[id] === 'imported',
       projectedFor: projectedForSource(id)
@@ -884,6 +916,10 @@ const confidencePill: Record<string, { label: string, tone: string }> = {
         :sources="cashSources"
         :multi-source="selectedIds.length > 1"
         :fmt="cashFmt"
+        :refreshed-at="accountsAt"
+        :refreshing="accountsRefreshing"
+        :error="accountsError"
+        @refresh="refreshAccounts()"
         @toggle="toggleAccount"
         @set-balance="setAccountBalance"
         @clear-override="clearAccountOverride"

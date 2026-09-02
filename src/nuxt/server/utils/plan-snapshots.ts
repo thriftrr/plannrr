@@ -28,6 +28,7 @@ export interface PlanSnapshot {
   // The open on-budget accounts behind that sum, so the calendar can show
   // each one and let a person count or edit it.
   accounts?: BudgetAccount[]
+  accountsAt?: string // when those balances were read from YNAB
   syncedAt?: string
 }
 
@@ -127,6 +128,7 @@ export async function snapshotYnabPlan (
     transactions,
     accountBalanceNow,
     accounts,
+    accountsAt: new Date().toISOString(),
     syncedAt: new Date().toISOString()
   }
 }

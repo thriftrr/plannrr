@@ -25,8 +25,12 @@ const props = defineProps<{
   sources: Array<{ id: string, name: string }>
   multiSource: boolean
   fmt: (milliunits: number) => string
+  refreshedAt?: string | null
+  refreshing?: boolean
+  error?: string
 }>()
 const emit = defineEmits<{
+  refresh: []
   toggle: [row: CashRow]
   setBalance: [row: CashRow, milliunits: number]
   clearOverride: [row: CashRow]
@@ -44,6 +48,15 @@ onMounted(() => document.addEventListener('click', onDocClick))
 onUnmounted(() => document.removeEventListener('click', onDocClick))
 
 const faceLabel = computed(() => props.total === null ? 'Cash on hand' : `${props.fmt(props.total)} on hand`)
+
+const refreshedLabel = computed(() => {
+  if (!props.refreshedAt) return ''
+  const at = new Date(props.refreshedAt)
+  const sameDay = at.toDateString() === new Date().toDateString()
+  return sameDay
+    ? `as of ${at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
+    : `as of ${at.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+})
 
 const grouped = computed(() => {
   const map = new Map<string, { name: string, rows: CashRow[] }>()
@@ -92,7 +105,13 @@ function submitAdd () {
       <span class="caret">▼</span>
     </button>
     <div v-if="open" class="pop" @click.stop>
-      <div class="caption">Cash on hand</div>
+      <div class="caption-row">
+        <div class="caption">Cash on hand</div>
+        <button class="refresh" :disabled="refreshing" :title="refreshedAt ? `Balances from YNAB ${refreshedLabel}` : 'Read live balances from YNAB'" @click="emit('refresh')">
+          {{ refreshing ? 'Reading YNAB…' : `↻ Refresh${refreshedLabel ? ' · ' + refreshedLabel : ''}` }}
+        </button>
+      </div>
+      <div v-if="error" class="error">{{ error }}</div>
 
       <div v-if="!rows.length" class="empty">
         No accounts yet — add your checking, savings, and cards below and the balance line starts from their total.
@@ -167,7 +186,7 @@ function submitAdd () {
       </div>
       <button v-else class="add" @click="startAdd">+ Add an account</button>
 
-      <div class="note">Synced accounts refresh with each sync; a balance you type here sticks until you reset it. Cards and credit lines subtract.</div>
+      <div class="note">Balances come live from YNAB each visit; a balance you type here sticks until you reset it. Cards and credit lines subtract.</div>
     </div>
   </div>
 </template>
@@ -215,6 +234,20 @@ function submitAdd () {
   padding: 4px 8px 6px;
 }
 .source-name { padding-top: 8px; color: var(--teal-dark); }
+.caption-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.refresh {
+  border: none;
+  background: none;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--teal-dark);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.refresh:hover:not(:disabled) { text-decoration: underline; }
+.refresh:disabled { color: var(--fg-faint); cursor: default; }
+.error { margin: 0 8px 6px; padding: 6px 8px; font-size: 11.5px; color: var(--danger); background: var(--danger-bg); border-radius: var(--r-xs); }
 .empty { padding: 4px 8px 8px; font-size: 12.5px; color: var(--fg-muted); line-height: 1.45; }
 .row {
   display: flex;
