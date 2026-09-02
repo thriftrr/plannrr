@@ -266,12 +266,12 @@ async function deleteSource (row: SourceRow) {
     const res = await $fetch<{ debtsDeleted: number }>(`/api/sources/${row.id}`, { method: 'DELETE' })
     confirmingId.value = null
     sourceMessage.value = res.debtsDeleted
-      ? `Deleted “${row.name}” and ${res.debtsDeleted} debt account${res.debtsDeleted === 1 ? '' : 's'} from it.`
-      : `Deleted “${row.name}”.`
+      ? `Removed “${row.name}” and ${res.debtsDeleted} debt account${res.debtsDeleted === 1 ? '' : 's'} from it.`
+      : `Removed “${row.name}”.`
     await loadSources()
   } catch (cause: unknown) {
     const err = cause as { data?: { statusMessage?: string } }
-    sourceMessage.value = err.data?.statusMessage ?? 'Could not delete that source.'
+    sourceMessage.value = err.data?.statusMessage ?? 'Could not remove that budget.'
   } finally {
     sourceBusy.value = false
   }
@@ -520,14 +520,14 @@ async function signOut () {
             </span>
             <template v-if="confirmingId === row.id">
               <span class="y-tiny confirm-note">
-                Deletes this budget{{ row.debtCount ? ` and its ${row.debtCount} synced debt${row.debtCount === 1 ? '' : 's'}` : '' }} — sure?
+                Removes this budget from Plannrr{{ row.debtCount ? ` and its ${row.debtCount} synced debt${row.debtCount === 1 ? '' : 's'}` : '' }} — nothing changes in YNAB. Sure?
               </span>
               <button class="y-btn-danger" :disabled="sourceBusy" @click="deleteSource(row)">
-                {{ sourceBusy ? 'Deleting…' : 'Yes, delete' }}
+                {{ sourceBusy ? 'Removing…' : 'Yes, remove' }}
               </button>
               <button class="y-btn-link" :disabled="sourceBusy" @click="confirmingId = null">Cancel</button>
             </template>
-            <button v-else class="y-btn-danger" @click="confirmingId = row.id">Delete</button>
+            <button v-else class="y-btn-danger" title="Remove from Plannrr — YNAB is untouched" @click="confirmingId = row.id">Remove</button>
           </div>
         </div>
         <p v-else class="y-body empty-sources">
