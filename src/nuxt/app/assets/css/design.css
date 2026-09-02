@@ -124,6 +124,56 @@
   --content-max:         980px;
 }
 
+/* ============================================================
+   PALETTES — six re-tints of the accent family, sidebar, and
+   badge tints (ids in shared/types/palette.ts). Every sidebar
+   ground keeps white text ≥ 4.5:1; the cream ground only shifts
+   a hair so cards and borders read the same everywhere.
+   ============================================================ */
+
+html[data-palette="ocean"] {
+  --bg-app: #f7f7f1; --bg-sunk: #f7f7f1;
+  --teal: #2f6fd6; --teal-dark: #1f56b0; --teal-deep: #1f5fb8;
+  --teal-bg: #ecf2fc; --teal-border: #bdd3f3; --teal-badge: #d9e6fa;
+  --nav-fg: #e0ebfb; --nav-fg-dim: #b9cff3; --nav-fg-faint: #93b6ea; --nav-accent: #a9c9f7;
+  --shadow-hover: 0 2px 10px rgba(47, 111, 214, 0.14);
+}
+html[data-palette="forest"] {
+  --bg-app: #f9f7ee; --bg-sunk: #f9f7ee;
+  --teal: #3a8f4a; --teal-dark: #2b6e38; --teal-deep: #2e7340;
+  --teal-bg: #edf6ee; --teal-border: #bfe0c4; --teal-badge: #d9efdc;
+  --nav-fg: #e1f3e4; --nav-fg-dim: #b7dcbd; --nav-fg-faint: #91c79b; --nav-accent: #a4e2ad;
+  --shadow-hover: 0 2px 10px rgba(58, 143, 74, 0.14);
+}
+html[data-palette="plum"] {
+  --bg-app: #faf5f2; --bg-sunk: #faf5f2;
+  --teal: #8a4bb0; --teal-dark: #6c3a8c; --teal-deep: #6f3f8f;
+  --teal-bg: #f4eef8; --teal-border: #dcc6ea; --teal-badge: #e9daf3;
+  --nav-fg: #f0e4f7; --nav-fg-dim: #d7c2e6; --nav-fg-faint: #bda1d3; --nav-accent: #d8b6ef;
+  --shadow-hover: 0 2px 10px rgba(138, 75, 176, 0.14);
+}
+html[data-palette="ember"] {
+  --bg-app: #fbf5ec; --bg-sunk: #fbf5ec;
+  --teal: #c6532b; --teal-dark: #9c3f20; --teal-deep: #a8452a;
+  --teal-bg: #fbeee8; --teal-border: #efc5b4; --teal-badge: #f6dcd0;
+  --nav-fg: #fbe6de; --nav-fg-dim: #f0c2b2; --nav-fg-faint: #e5a08a; --nav-accent: #f5c0aa;
+  --shadow-hover: 0 2px 10px rgba(198, 83, 43, 0.14);
+}
+html[data-palette="slate"] {
+  --bg-app: #f6f5f1; --bg-sunk: #f6f5f1;
+  --teal: #5b6b83; --teal-dark: #43526a; --teal-deep: #46546b;
+  --teal-bg: #eff1f5; --teal-border: #c9d1dd; --teal-badge: #dfe4ec;
+  --nav-fg: #e6eaf1; --nav-fg-dim: #c3ccd9; --nav-fg-faint: #9faab9; --nav-accent: #b8c6da;
+  --shadow-hover: 0 2px 10px rgba(91, 107, 131, 0.14);
+}
+html[data-palette="rose"] {
+  --bg-app: #fbf5f1; --bg-sunk: #fbf5f1;
+  --teal: #c2456a; --teal-dark: #9a3253; --teal-deep: #a03a5b;
+  --teal-bg: #fbeef2; --teal-border: #efc3d1; --teal-badge: #f6d9e1;
+  --nav-fg: #fbe3ea; --nav-fg-dim: #f0bfcc; --nav-fg-faint: #e49bb0; --nav-accent: #f4b8c8;
+  --shadow-hover: 0 2px 10px rgba(194, 69, 106, 0.14);
+}
+
 /* ------------------------------------------------------------
    CONTRAST NOTE — measured against WCAG 2.1 AA (4.5:1 normal text)
    These values are the design's, kept verbatim. Four of them fall

@@ -1,4 +1,5 @@
 import { CURRENCY_CODES } from '#shared/types/currency'
+import { isPaletteId } from '#shared/types/palette'
 import type { ProfilePatch } from '../../utils/auth-db'
 
 const MAX_NAME = 60
@@ -19,7 +20,7 @@ function cleanName (value: unknown): string | null | undefined {
 
 export default defineEventHandler(async (event) => {
   const user = await requireUser(event)
-  const body = await readBody<{ firstName?: unknown, lastName?: unknown, currency?: unknown }>(event)
+  const body = await readBody<{ firstName?: unknown, lastName?: unknown, currency?: unknown, palette?: unknown, dismissOnboarding?: unknown }>(event)
 
   const patch: ProfilePatch = {}
 
@@ -35,6 +36,15 @@ export default defineEventHandler(async (event) => {
     }
     patch.currency = code
   }
+
+  if (body?.palette !== undefined) {
+    if (!isPaletteId(body.palette)) {
+      throw createError({ statusCode: 400, statusMessage: 'Unknown colour palette' })
+    }
+    patch.palette = body.palette
+  }
+
+  if (body?.dismissOnboarding === true) patch.onboardingDismissedAt = new Date().toISOString()
 
   await updateUserProfile(user.id, patch)
   return { ok: true }

@@ -57,6 +57,13 @@
       "when": 1788358923046,
       "tag": "0007_feedback",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1788365774272,
+      "tag": "0008_palette",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 useHead({ title: 'Account' })
 import { CURRENCIES } from '#shared/types/currency'
+import { PALETTES, DEFAULT_PALETTE } from '#shared/types/palette'
 
 const { user, loaded, refresh, logout } = useAuth()
 
@@ -24,6 +25,28 @@ const avatarBusy = ref(false)
 const avatarError = ref('')
 const avatarFile = ref<HTMLInputElement>()
 const { avatarUrl, initials, hasCustom: hasCustomAvatar, source: avatarSource } = useAvatar()
+
+// ---- Colour palette ----------------------------------------------------------
+const { palette, save: savePalette } = usePalette()
+const paletteBusy = ref(false)
+const paletteError = ref('')
+const paletteSavedAs = ref('')
+
+async function choosePalette (id: string) {
+  if (paletteBusy.value) return
+  paletteBusy.value = true
+  paletteError.value = ''
+  try {
+    await savePalette(id)
+    paletteSavedAs.value = id
+    setTimeout(() => { if (paletteSavedAs.value === id) paletteSavedAs.value = '' }, 2000)
+  } catch (cause: unknown) {
+    const err = cause as { data?: { statusMessage?: string } }
+    paletteError.value = err.data?.statusMessage ?? 'Could not save that palette — it applies for now anyway.'
+  } finally {
+    paletteBusy.value = false
+  }
+}
 
 const MAX_AVATAR_BYTES = 1024 * 1024
 
@@ -350,7 +373,7 @@ async function signOut () {
     <p v-if="!loaded" class="y-body loading">Loading…</p>
 
     <template v-else-if="user">
-      <section class="y-card">
+      <section id="profile" class="y-card">
         <div class="y-card-title">Profile</div>
         <div class="profile-body">
           <div class="avatar-col">
@@ -418,7 +441,38 @@ async function signOut () {
         </div>
       </section>
 
-      <section class="y-card">
+      <section id="palette" class="y-card">
+        <div class="head-row">
+          <div class="y-card-title">Colour palette</div>
+          <span v-if="paletteSavedAs" class="y-badge">Saved ✓</span>
+        </div>
+        <p class="y-body">
+          The whole app re-tints — sidebar, buttons, links, badges. Pick the one that feels like yours.
+        </p>
+        <div class="palettes" role="radiogroup" aria-label="Colour palette">
+          <button
+            v-for="p in PALETTES"
+            :key="p.id"
+            type="button"
+            class="swatch"
+            :class="{ on: palette === p.id }"
+            role="radio"
+            :aria-checked="palette === p.id"
+            :disabled="paletteBusy"
+            @click="choosePalette(p.id)"
+          >
+            <span class="swatch-art" :style="{ background: p.ground }">
+              <span class="swatch-bar" :style="{ background: p.sidebar }" />
+              <span class="swatch-dot" :style="{ background: p.accent }" />
+              <span class="swatch-line" :style="{ background: p.accent }" />
+            </span>
+            <span class="swatch-name">{{ p.name }}<template v-if="p.id === DEFAULT_PALETTE"> · default</template></span>
+          </button>
+        </div>
+        <p v-if="paletteError" class="y-error msg">{{ paletteError }}</p>
+      </section>
+
+      <section id="ynab-token" class="y-card">
         <div class="head-row">
           <div class="y-card-title">YNAB access token</div>
           <span v-if="user.hasPat" class="y-badge">Connected</span>
@@ -476,11 +530,11 @@ async function signOut () {
           <span class="y-tiny" role="status">{{ resyncStatus }}</span>
         </div>
         <p class="y-tiny note">
-          One-way sync: Plannrr only pulls from YNAB — nothing is ever written back.
+          Plannrr pulls from YNAB on sync; the only writes back are the ones you review and confirm in Tinkrr.
         </p>
       </section>
 
-      <section class="y-card">
+      <section id="sources" class="y-card">
         <div class="head-row">
           <div class="y-card-title">Budget sources</div>
           <button class="y-btn-dashed new-budget" @click="newBudget.open = !newBudget.open">+ New budget</button>
@@ -714,6 +768,43 @@ h1 { font-size: 26px; }
 
 .zip-block { margin-top: 18px; border-top: 1.5px solid var(--border-soft); padding-top: 14px; }
 .zip-title { font-weight: 800; font-size: 13.5px; }
+
+/* ---- palette swatches ---- */
+.palettes {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 10px;
+}
+.swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
+  padding: 6px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg-card);
+  cursor: pointer;
+  font: inherit;
+  color: var(--fg-muted);
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.swatch:hover:not(:disabled) { border-color: var(--border-strong); }
+.swatch.on { border-color: var(--teal); box-shadow: 0 0 0 2px var(--teal-badge); color: var(--teal-dark); }
+.swatch:disabled { cursor: default; }
+.swatch-art {
+  position: relative;
+  height: 54px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border-soft);
+  overflow: hidden;
+  display: block;
+}
+.swatch-bar { position: absolute; inset: 0 auto 0 0; width: 30%; }
+.swatch-dot { position: absolute; top: 12px; left: 42%; width: 14px; height: 14px; border-radius: 50%; }
+.swatch-line { position: absolute; left: 42%; right: 12%; top: 34px; height: 6px; border-radius: 3px; opacity: 0.45; }
+.swatch-name { font-size: 12px; font-weight: 800; text-align: center; }
 
 @media (max-width: 860px) {
   .page { padding: 32px 24px 48px; }

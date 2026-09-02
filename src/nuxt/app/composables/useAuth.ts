@@ -6,6 +6,9 @@ export interface AuthUser {
   firstName: string | null
   lastName: string | null
   currency: string
+  // colour palette id, null until the person picks one
+  palette: string | null
+  onboardingDismissedAt: string | null
   avatarUrl: string | null
 }
 

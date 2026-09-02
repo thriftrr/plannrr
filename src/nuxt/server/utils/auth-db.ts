@@ -50,6 +50,8 @@ export interface ProfilePatch {
   firstName?: string | null
   lastName?: string | null
   currency?: string
+  palette?: string | null
+  onboardingDismissedAt?: string | null
 }
 
 export async function updateUserProfile (id: string, patch: ProfilePatch): Promise<void> {

@@ -14,6 +14,8 @@ export default defineEventHandler(async (event) => {
       firstName: user.firstName,
       lastName: user.lastName,
       currency: user.currency ?? 'USD',
+      palette: user.palette ?? null,
+      onboardingDismissedAt: user.onboardingDismissedAt ?? null,
       // Cache-bust on the key so a replaced photo shows up immediately.
       avatarUrl: user.avatarKey ? `/api/account/avatar?v=${encodeURIComponent(user.avatarKey)}` : null
     }

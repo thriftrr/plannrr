@@ -12,6 +12,10 @@ export const users = sqliteTable('users', {
   currency: text('currency').notNull().default('USD'),
   // R2 object key for an uploaded avatar. Null = fall back to Gravatar.
   avatarKey: text('avatar_key'),
+  // Colour palette id (shared/types/palette.ts). Null = the default teal.
+  palette: text('palette'),
+  // When the home "fill in your profile" card was skipped. Null = still shown.
+  onboardingDismissedAt: text('onboarding_dismissed_at'),
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`)
 })
 
