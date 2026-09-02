@@ -64,6 +64,11 @@ const selectedPlanIds = ref<string[]>([])
 const syncing = ref(false)
 const syncMessage = ref('')
 
+const importOpen = ref(false)
+const importText = ref('')
+const importing = ref(false)
+const importMessage = ref('')
+
 const adding = ref(false)
 const addForm = ref({ name: '', original: '', balance: '0', startMonth: '', endMonth: '', rate: '', payment: '' })
 const addMessage = ref('')
@@ -150,9 +155,12 @@ watch(extras, (value) => {
 
 function togglePlan (id: string) {
   const current = selectedPlanIds.value
-  selectedPlanIds.value = current.includes(id)
-    ? current.filter(item => item !== id)
-    : [...current, id]
+  if (current.includes(id)) {
+    if (current.length === 1) return // the picker locks the last budget
+    selectedPlanIds.value = current.filter(item => item !== id)
+  } else {
+    selectedPlanIds.value = syncPlans.value.map(plan => plan.id).filter(pid => current.includes(pid) || pid === id)
+  }
   try {
     localStorage.setItem(SYNC_PLANS_KEY, JSON.stringify(selectedPlanIds.value))
   } catch { /* storage blocked */ }
@@ -174,6 +182,135 @@ async function syncNow () {
     syncMessage.value = err.data?.statusMessage ?? 'Sync failed — try again.'
   } finally {
     syncing.value = false
+  }
+}
+
+const syncPickerLabel = computed(() => {
+  const chosen = syncPlans.value.filter(plan => selectedPlanIds.value.includes(plan.id))
+  if (!chosen.length) return 'No budgets'
+  return chosen.length === 1 ? chosen[0]!.name : `${chosen.length} budgets`
+})
+
+// ---- Import / export -------------------------------------------------------
+// Same shape both ways: decimal currency amounts (positive), months as
+// YYYY-MM. Synced rows are exported for reference; on import every row
+// becomes a hand-tracked debt, matched by name so re-imports update in place.
+interface ExportDebt {
+  name: string
+  startDate: string
+  endDate: string | null
+  startBalance: number
+  balance: number
+  paidIn: number
+  rate: number | null
+  minimumPayment: number | null
+  history: Array<{ month: string, balance: number }>
+  source: DebtRecord['source']
+  planName: string
+}
+
+const toUnits = (milliunits: number) => Math.round(Math.abs(milliunits)) / 1000
+
+function exportJson () {
+  const out = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    currency: userCurrency.value,
+    debts: loans.value.filter(loan => !loan.hidden).map<ExportDebt>(loan => ({
+      name: loan.name,
+      startDate: loan.startDate.slice(0, 7),
+      endDate: loan.endDate ? loan.endDate.slice(0, 7) : null,
+      startBalance: toUnits(loan.startBalance),
+      balance: toUnits(loan.balance),
+      paidIn: toUnits(loan.paidIn),
+      rate: loan.rate,
+      minimumPayment: loan.minimumPayment == null ? null : toUnits(loan.minimumPayment),
+      history: loan.history.map(point => ({ month: point.month.slice(0, 7), balance: toUnits(point.balance) })),
+      source: loan.source,
+      planName: loan.planName
+    }))
+  }
+  const url = URL.createObjectURL(new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'debt-colectrr.json'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+type ParsedImport = { debts: Array<Record<string, unknown>> | null, error: string }
+const IMPORT_MONTH_RE = /^\d{4}-\d{2}(-\d{2})?$/
+
+const parsedImport = computed<ParsedImport>(() => {
+  const text = importText.value
+  if (!text.trim()) return { debts: null, error: '' }
+  let data: unknown
+  try {
+    data = JSON.parse(text)
+  } catch (cause) {
+    return { debts: null, error: 'Not valid JSON — ' + (cause as Error).message }
+  }
+  // Accept the exported object or a bare array of debts.
+  const list = Array.isArray(data) ? data : (data as { debts?: unknown })?.debts
+  if (!Array.isArray(list)) return { debts: null, error: 'Expected { "debts": [ … ] } (or a bare array of debts).' }
+  if (!list.length) return { debts: null, error: 'No debts in that JSON.' }
+  for (let i = 0; i < list.length; i++) {
+    const row = list[i] as Record<string, unknown>
+    const label = `Debt ${i + 1}`
+    if (!row || typeof row !== 'object') return { debts: null, error: `${label} isn't an object.` }
+    if (typeof row.name !== 'string' || !row.name.trim()) return { debts: null, error: `${label} needs a name.` }
+    const original = Math.abs(Number.parseFloat(String(row.startBalance ?? '')))
+    if (!(original > 0)) return { debts: null, error: `${label} (${row.name}): startBalance must be a positive amount.` }
+    const balance = Math.abs(Number.parseFloat(String(row.balance ?? 0)))
+    if (Number.isNaN(balance) || balance > original) return { debts: null, error: `${label} (${row.name}): balance must be between 0 and startBalance.` }
+    if (typeof row.startDate !== 'string' || !IMPORT_MONTH_RE.test(row.startDate)) return { debts: null, error: `${label} (${row.name}): startDate must be YYYY-MM.` }
+    if (row.endDate && (typeof row.endDate !== 'string' || !IMPORT_MONTH_RE.test(row.endDate))) return { debts: null, error: `${label} (${row.name}): endDate must be YYYY-MM.` }
+  }
+  return { debts: list as Array<Record<string, unknown>>, error: '' }
+})
+
+const canImport = computed(() => Boolean(parsedImport.value.debts?.length) && !importing.value)
+
+const importStatus = computed(() => {
+  const parsed = parsedImport.value
+  if (parsed.error) return parsed.error
+  if (parsed.debts?.length) return `${parsed.debts.length} debt${parsed.debts.length === 1 ? '' : 's'} ready ✓`
+  return 'Waiting for JSON…'
+})
+
+function pickImportFile () {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '.json,application/json'
+  input.onchange = () => {
+    const file = input.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => { importText.value = String(reader.result) }
+    reader.readAsText(file)
+  }
+  input.click()
+}
+
+async function doImport () {
+  const rows = parsedImport.value.debts
+  if (!rows?.length || importing.value) return
+  importing.value = true
+  importMessage.value = ''
+  try {
+    const result = await $fetch<{ created: number, updated: number }>('/api/debt/import', {
+      method: 'POST',
+      body: { debts: rows }
+    })
+    importOpen.value = false
+    importText.value = ''
+    syncMessage.value = `Imported ${result.created} new · ${result.updated} updated`
+    await loadDebts()
+  } catch (cause: unknown) {
+    const err = cause as { data?: { statusMessage?: string } }
+    importMessage.value = err.data?.statusMessage ?? 'Import failed — check the JSON and try again.'
+  } finally {
+    importing.value = false
   }
 }
 
@@ -897,6 +1034,9 @@ const hover = computed(() => {
 
 const totalBalance = computed(() => activeLoans.value.reduce((sum, loan) => sum - loan.balance, 0))
 const totalPaidIn = computed(() => visibleLoans.value.reduce((sum, loan) => sum + loan.paidIn, 0))
+// Every visible loan's original amount, trophies included — all the debt
+// you've ever carried here. (Overrides already resolved in `loans`.)
+const totalBorrowed = computed(() => visibleLoans.value.reduce((sum, loan) => sum + Math.abs(loan.startBalance), 0))
 const totalMinimums = computed(() => activeLoans.value.reduce((sum, loan) => sum + paymentFor(loan), 0))
 const totalPayment = computed(() =>
   pooled.value ? totalMinimums.value + snowballPool.value : totalMinimums.value
@@ -948,6 +1088,10 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
         <h1>Debt Colectrr</h1>
         <NuxtLink to="/remembrr" class="story-link">Remembrr — the story so far →</NuxtLink>
         <span v-if="isMock" class="badge" title="Serving built-in sample data — no YNAB account is being read">Mock data</span>
+        <div v-if="!loading" class="top-actions">
+          <button v-if="!isMock" class="y-btn-outline" @click="importOpen = true; importMessage = ''">⇪ Import JSON</button>
+          <button v-if="loans.length" class="y-btn-secondary" @click="exportJson">⇓ Export JSON</button>
+        </div>
       </div>
       <p class="tagline">
         Every loan's real history — synced from YNAB or added by hand — then
@@ -958,10 +1102,14 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
     <section v-if="!isMock && !loading" class="sync-bar">
       <span class="picker-label">Sync from</span>
       <template v-if="syncPlans.length">
-        <label v-for="plan in syncPlans" :key="plan.id" class="pill" :class="{ on: selectedPlanIds.includes(plan.id) }">
-          <input type="checkbox" :checked="selectedPlanIds.includes(plan.id)" @change="togglePlan(plan.id)">
-          {{ plan.name }}
-        </label>
+        <PlanPicker
+          :plans="syncPlans"
+          :selected="selectedPlanIds"
+          :label="syncPickerLabel"
+          caption="Sync from"
+          note="Loan accounts from every selected budget are pulled in."
+          @toggle="togglePlan"
+        />
         <button class="primary" :disabled="syncing || !selectedPlanIds.length" @click="syncNow">
           {{ syncing ? 'Syncing…' : 'Sync now' }}
         </button>
@@ -997,9 +1145,10 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
     <template v-else>
       <section class="stats">
         <article>
-          <h3>Total debt</h3>
+          <h3>Remaining debt</h3>
           <p>{{ fmt(totalBalance) }}</p>
           <p class="sub">across {{ activeLoans.length }} active {{ activeLoans.length === 1 ? 'loan' : 'loans' }}</p>
+          <p class="sub borrowed">{{ fmt(totalBorrowed) }} borrowed all-time</p>
         </article>
         <article>
           <h3>Paid down</h3>
@@ -1471,6 +1620,58 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
         </footer>
       </aside>
     </div>
+
+    <!-- Import modal -->
+    <div v-if="importOpen" class="overlay" @click="importOpen = false">
+      <div class="modal" role="dialog" aria-label="Import debts from JSON" @click.stop>
+        <div class="modal-head">
+          <div class="modal-title">Import debts from JSON</div>
+          <button class="x" aria-label="Close" @click="importOpen = false">✕</button>
+        </div>
+        <p class="modal-copy">
+          Paste (or pick a file with) the shape <b>Export JSON</b> writes:
+          <code>{ "debts": [ … ] }</code>. Amounts are plain currency
+          (<code>19591.20</code>, not milliunits) and always positive; months are
+          <code>YYYY-MM</code>. Every row becomes a <b>hand-tracked</b> debt — a
+          row whose name matches one you already track by hand <b>updates it</b>
+          instead of adding a duplicate. Synced YNAB rows are never changed.
+        </p>
+        <table class="fields">
+          <tbody>
+            <tr><td><code>name</code></td><td>required</td></tr>
+            <tr><td><code>startBalance</code></td><td>required — the original amount borrowed</td></tr>
+            <tr><td><code>startDate</code></td><td>required — month the loan began</td></tr>
+            <tr><td><code>balance</code></td><td>what's left today (0 = paid off)</td></tr>
+            <tr><td><code>endDate</code></td><td>month it was paid off, if it was</td></tr>
+            <tr><td><code>rate</code>, <code>minimumPayment</code></td><td>APR % and monthly payment</td></tr>
+            <tr><td><code>paidIn</code></td><td>total paid so far (defaults to startBalance − balance)</td></tr>
+            <tr><td><code>history</code></td><td>optional <code>[{ "month", "balance" }]</code> — real month-by-month balances; without it the chart draws a straight paydown</td></tr>
+          </tbody>
+        </table>
+        <pre class="example">{
+  "debts": [
+    { "name": "🚐 RV loan", "startDate": "2024-06",
+      "startBalance": 19591, "balance": 14200,
+      "rate": 7.9, "minimumPayment": 385 },
+    { "name": "🚗 The Honda", "startDate": "2021-03",
+      "endDate": "2025-04", "startBalance": 19000, "balance": 0 }
+  ]
+}</pre>
+        <textarea v-model="importText" rows="6" class="paste" placeholder="Paste your JSON here…" />
+        <div class="import-row">
+          <button class="y-btn-dashed" @click="pickImportFile">…or choose a .json file</button>
+          <span class="import-status" :class="{ bad: parsedImport.error || importMessage, good: canImport && !importMessage }">{{ importMessage || importStatus }}</span>
+        </div>
+        <div class="modal-actions">
+          <button class="y-btn-secondary" @click="importOpen = false">Cancel</button>
+          <button class="y-btn" :disabled="!canImport" @click="doImport">
+            <template v-if="importing">Importing…</template>
+            <template v-else-if="canImport">Import {{ parsedImport.debts!.length }} debt{{ parsedImport.debts!.length === 1 ? '' : 's' }}</template>
+            <template v-else>Import</template>
+          </button>
+        </div>
+      </div>
+    </div>
   </main>
 </template>
 
@@ -1523,22 +1724,7 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
   color: var(--fg-subtle);
 }
 
-.pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
-  border: 1.5px solid var(--border-input);
-  border-radius: var(--r-pill);
-  background: var(--bg-card);
-  font-size: 12.5px;
-  font-weight: 700;
-  color: var(--fg-muted);
-  cursor: pointer;
-  user-select: none;
-}
-.pill input { position: absolute; opacity: 0; pointer-events: none; }
-.pill.on { border-color: var(--teal); background: var(--teal); color: #fff; }
+.top-actions { margin-left: auto; display: flex; gap: 8px; align-self: center; }
 
 .primary {
   padding: 7px 16px;
@@ -1608,6 +1794,7 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
 
 .stats p { margin: 4px 0 0; font-size: 21px; font-weight: 800; font-variant-numeric: tabular-nums; }
 .stats .sub { font-size: 11.5px; font-weight: 400; color: var(--fg-faint); margin-top: 0; }
+.stats .sub.borrowed { margin-top: 2px; font-weight: 700; color: var(--fg-subtle); }
 
 /* Paid down reads green; the Debt-free card is the teal celebration */
 .stats article:nth-child(2) p:not(.sub) { color: var(--ok); }
@@ -2047,6 +2234,65 @@ td.actions { white-space: nowrap; text-align: right; }
 .howto:hover { color: var(--teal-dark); }
 
 /* ---- No horizontal scroll: shed the wide columns first ---- */
+/* ---- Import modal ---- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(43, 42, 38, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.modal {
+  width: 600px;
+  max-width: 100%;
+  max-height: 86vh;
+  overflow: auto;
+  background: var(--bg-card);
+  border-radius: var(--r-panel);
+  padding: 24px;
+  box-shadow: 0 12px 40px rgba(43, 42, 38, 0.3);
+}
+.modal-head { display: flex; align-items: baseline; gap: 10px; }
+.modal-title { font-weight: 800; font-size: 17px; }
+.x { margin-left: auto; border: none; background: none; color: var(--fg-subtle); font-size: 16px; font-weight: 800; cursor: pointer; padding: 0; }
+.modal-copy { margin: 8px 0 0; font-size: 13px; color: var(--fg-muted); line-height: 1.55; }
+.modal-copy code, .fields code { background: var(--bg-app); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+.fields { margin: 10px 0 0; border-collapse: collapse; font-size: 12.5px; color: var(--fg-muted); width: 100%; }
+.fields td { padding: 3px 0; vertical-align: top; }
+.fields td:first-child { white-space: nowrap; padding-right: 12px; }
+.example {
+  margin: 12px 0 0;
+  background: var(--fg);
+  color: var(--nav-fg);
+  border-radius: 10px;
+  padding: 14px 16px;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow: auto;
+}
+.paste {
+  margin-top: 12px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1.5px solid var(--border-input);
+  border-radius: var(--r-field);
+  font-size: 12.5px;
+  font-family: ui-monospace, Menlo, monospace;
+  background: var(--bg-input);
+  resize: vertical;
+  line-height: 1.5;
+}
+.paste:focus { border-color: var(--teal); outline: none; }
+.import-row { margin-top: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.import-status { font-size: 12px; font-weight: 700; color: var(--fg-faint); }
+.import-status.good { color: var(--ok); }
+.import-status.bad { color: var(--danger); }
+.modal-actions { margin-top: 16px; display: flex; gap: 10px; }
+
 @media (max-width: 1200px) {
   th.col-wide, td.col-wide { display: none; }
 }

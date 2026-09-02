@@ -150,6 +150,10 @@ export async function createManualDebt (userId: string, input: {
   endMonth: string | null
   rate?: number
   minimumPayment?: number
+  // A JSON import can carry the real month-by-month balances; without it the
+  // history is a straight ramp between the two known points.
+  history?: DebtHistoryPoint[]
+  paidIn?: number
 }): Promise<DebtRecord> {
   const endMonth = input.endMonth ?? new Date().toISOString().slice(0, 7) + '-01'
   const row = {
@@ -163,10 +167,10 @@ export async function createManualDebt (userId: string, input: {
     endDate: input.balance >= 0 ? endMonth.slice(0, 10) : null,
     startBalance: input.startBalance,
     balance: input.balance,
-    paidIn: Math.max(input.balance - input.startBalance, 0),
+    paidIn: input.paidIn ?? Math.max(input.balance - input.startBalance, 0),
     rate: input.rate ?? null,
     minimumPayment: input.minimumPayment ?? null,
-    history: JSON.stringify(linearHistory(input.startMonth, input.startBalance, endMonth, input.balance)),
+    history: JSON.stringify(input.history?.length ? input.history : linearHistory(input.startMonth, input.startBalance, endMonth, input.balance)),
     hidden: 0,
     updatedAt: new Date().toISOString()
   }
@@ -207,6 +211,8 @@ export async function updateManualDebt (userId: string, id: string, input: {
   endMonth: string | null
   rate: number | null
   minimumPayment: number | null
+  history?: DebtHistoryPoint[]
+  paidIn?: number
 }): Promise<boolean> {
   const nowMonth = `${new Date().toISOString().slice(0, 7)}-01`
   const endMonth = input.endMonth ?? nowMonth
@@ -215,10 +221,12 @@ export async function updateManualDebt (userId: string, id: string, input: {
     endDate: input.balance >= 0 ? endMonth.slice(0, 10) : null,
     startBalance: input.startBalance,
     balance: input.balance,
-    paidIn: Math.max(input.balance - input.startBalance, 0),
+    paidIn: input.paidIn ?? Math.max(input.balance - input.startBalance, 0),
     rate: input.rate,
     minimumPayment: input.minimumPayment,
-    history: JSON.stringify(linearHistory(input.startMonth, input.startBalance, input.balance >= 0 ? endMonth : nowMonth, input.balance)),
+    history: JSON.stringify(input.history?.length
+      ? input.history
+      : linearHistory(input.startMonth, input.startBalance, input.balance >= 0 ? endMonth : nowMonth, input.balance)),
     updatedAt: new Date().toISOString()
   }
   if (input.name) set.name = input.name
@@ -230,6 +238,16 @@ export async function updateManualDebt (userId: string, id: string, input: {
     ))
     .returning({ id: schema.debts.id })
   return rows.length > 0
+}
+
+// JSON imports upsert by name so re-importing an edited export never
+// duplicates a row. Case-insensitive; only hand-tracked rows are candidates.
+export async function findManualDebtByName (userId: string, name: string): Promise<string | null> {
+  const rows = await db.select({ id: schema.debts.id, name: schema.debts.name }).from(schema.debts)
+    .where(and(eq(schema.debts.userId, userId), eq(schema.debts.source, 'manual')))
+    .all()
+  const wanted = name.trim().toLowerCase()
+  return rows.find(row => row.name.trim().toLowerCase() === wanted)?.id ?? null
 }
 
 const PATCHABLE = ['name', 'rate', 'minimumPayment', 'hidden', 'userStartDate', 'userStartBalance', 'userName', 'userBalance', 'userPaidIn'] as const
