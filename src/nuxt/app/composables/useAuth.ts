@@ -1,5 +1,7 @@
 export interface AuthUser {
   email: string
+  // decided server-side from NUXT_ADMIN_EMAILS; the API is the real gate
+  isAdmin: boolean
   hasPat: boolean
   firstName: string | null
   lastName: string | null

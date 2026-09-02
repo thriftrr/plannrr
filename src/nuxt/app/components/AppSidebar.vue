@@ -127,6 +127,33 @@ onMounted(() => {
       </div>
     </nav>
 
+    <!-- Admin-only: the feedback inbox. The API refuses non-admins anyway. -->
+    <nav v-if="user?.isAdmin" class="nav admin" aria-label="Admin">
+      <div class="row">
+        <NuxtLink
+          to="/admin/feedback"
+          class="item"
+          :class="{ on: isActive('/admin/feedback') }"
+          @mouseenter="hovered = 'Feedback inbox'"
+          @mouseleave="hovered = null"
+          @focus="hovered = 'Feedback inbox'"
+          @blur="hovered = null"
+        >
+          <svg
+            width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+          >
+            <path d="M3 8l9 6 9-6" />
+            <rect x="3" y="5" width="18" height="14" rx="2.5" />
+          </svg>
+          <span v-if="!collapsed">Feedback inbox</span>
+        </NuxtLink>
+        <div v-if="collapsed && hovered === 'Feedback inbox'" class="flyout">
+          <span class="arrow" />Feedback inbox
+        </div>
+      </div>
+    </nav>
+
     <div class="foot">
       <NuxtLink
         v-if="user"
@@ -218,6 +245,7 @@ onMounted(() => {
 }
 
 .nav { display: flex; flex-direction: column; gap: 3px; margin-top: 20px; }
+.nav.admin { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.14); }
 
 .row { position: relative; }
 

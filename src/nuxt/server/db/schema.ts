@@ -78,3 +78,18 @@ export const storyEvents = sqliteTable('story_events', {
   note: text('note').notNull().default(''),
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`)
 })
+
+// Feedback: bug reports and suggestions from signed-in users. `body` is raw
+// Markdown exactly as submitted — never trusted, only ever rendered through
+// markdown-it with html disabled (so any tags inside are escaped text).
+export const feedback = sqliteTable('feedback', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  email: text('email').notNull(),
+  name: text('name').notNull().default(''),
+  body: text('body').notNull().default(''),
+  page: text('page').notNull().default(''),
+  userAgent: text('user_agent').notNull().default(''),
+  resolvedAt: text('resolved_at'),
+  createdAt: text('created_at').notNull().default(sql`(datetime('now'))`)
+})

@@ -85,6 +85,9 @@ export default defineNuxtConfig({
     cfEmailToken: '',
     emailFrom: '',
     // absolute origin for emailed links; defaults to the request origin
-    appOrigin: ''
+    appOrigin: '',
+    // comma-separated emails that see the feedback inbox and get notified
+    // when feedback arrives (NUXT_ADMIN_EMAILS)
+    adminEmails: 'me@jonknoll.dev'
   }
 })

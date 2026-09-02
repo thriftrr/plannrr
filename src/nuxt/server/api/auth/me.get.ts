@@ -9,6 +9,7 @@ export default defineEventHandler(async (event) => {
   return {
     user: {
       email: user.email,
+      isAdmin: isAdminEmail(user.email),
       hasPat: Boolean(user.patCipher),
       firstName: user.firstName,
       lastName: user.lastName,

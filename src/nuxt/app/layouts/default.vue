@@ -2,6 +2,7 @@
   <div class="app">
     <AppSidebar />
     <slot />
+    <FeedbackFab />
   </div>
 </template>
 
