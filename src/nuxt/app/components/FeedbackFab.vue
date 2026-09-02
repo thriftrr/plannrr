@@ -6,6 +6,9 @@ const { user, loaded } = useAuth()
 const route = useRoute()
 
 const open = ref(false)
+// The phone top bar has no room for the pill; it flips this shared flag.
+const remoteOpen = useState<boolean>('feedback-open', () => false)
+watch(remoteOpen, (value) => { if (value) { show(); remoteOpen.value = false } })
 const name = ref('')
 const body = ref('')
 const sending = ref(false)
@@ -152,10 +155,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
 .fab:focus-visible { outline: 3px solid var(--teal-border); outline-offset: 2px; }
 .fab svg { display: block; flex: none; }
 
-@media (max-width: 700px) {
-  .fab { right: 14px; bottom: 14px; padding: 10px 13px; }
-  .fab span { display: none; }
-}
+@media (max-width: 759px) { .fab { display: none; } }
 </style>
 
 <style>

@@ -1,7 +1,16 @@
+<script setup lang="ts">
+// Desktop: sidebar + page (+ the page's own right rail), centre column scrolls.
+// Phone (<760px): top bar + document scroll + fixed tab bar; the sidebar is
+// hidden by CSS so nothing flashes before hydration.
+useViewport()
+</script>
+
 <template>
   <div class="app">
     <AppSidebar />
+    <MobileTopBar />
     <slot />
+    <MobileTabBar />
     <FeedbackFab />
   </div>
 </template>
@@ -13,5 +22,13 @@
   display: flex;
   align-items: flex-start;
   min-height: 100vh;
+  min-height: 100dvh;
+}
+@media (max-width: 759px) {
+  .app {
+    flex-direction: column;
+    align-items: stretch;
+    padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+  }
 }
 </style>

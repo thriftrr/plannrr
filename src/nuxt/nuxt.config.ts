@@ -37,7 +37,12 @@ export default defineNuxtConfig({
     head: {
       htmlAttrs: { lang: 'en' },
       title: 'Plannrr',
-      meta: [{ name: 'description', content: 'A planning companion that plays nicely with YNAB.' }],
+      meta: [
+        { name: 'description', content: 'A planning companion that plays nicely with YNAB.' },
+        // viewport-fit=cover lets the phone shell pad for the notch/home bar
+        { name: 'viewport', content: 'width=device-width, initial-scale=1, viewport-fit=cover' },
+        { name: 'theme-color', content: '#0e7c73' }
+      ],
       link: [
         // Brand mark (Brand.dc.html): SVG first, ICO fallback, 180px touch icon.
         { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' },

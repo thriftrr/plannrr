@@ -43,10 +43,11 @@ function reset () {
       <p class="y-body">
         No password — we'll email you a sign-in link that's valid for 15 minutes.
       </p>
-      <!-- onsubmit guard: before hydration attaches the Vue handler, a native
-           submit would GET /login and reload the page, wiping the form. The
-           inline attribute blocks that from the very first paint. -->
-      <form onsubmit="return false" @submit.prevent="submit">
+      <!-- method="dialog": before hydration attaches the Vue handler, a native
+           submit would GET /login and reload the page, wiping the form. A
+           dialog-method form outside a <dialog> submits nowhere, and unlike an
+           inline onsubmit="return false" it needs no CSP exception. -->
+      <form method="dialog" @submit.prevent="submit">
         <input
           v-model="email"
           class="y-input"

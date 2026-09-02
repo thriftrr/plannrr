@@ -4,7 +4,22 @@
 // of the page scrolls (its own overflow scrolls internally when taller).
 // With `expandable`, a second toggle widens it to ~2/5 of the page for a
 // roomier working layout; the slot receives { wide } to adapt its content.
-const props = defineProps<{ storageKey: string, expandable?: boolean }>()
+// Under 1100px the pinned rail can't exist. `phone` picks what replaces it:
+//   'inline' (default) — the panel renders as a block after the page content
+//   'sheet'            — a sticky bar (the `bar` slot) above the tab bar opens
+//                        the panel as a bottom sheet
+const props = defineProps<{ storageKey: string, expandable?: boolean, phone?: 'inline' | 'sheet' }>()
+const { isTablet } = useViewport()
+const sheetOpen = ref(false)
+watch(isTablet, (compact) => { if (!compact) sheetOpen.value = false })
+function onSheetKey (event: KeyboardEvent) { if (event.key === 'Escape') sheetOpen.value = false }
+watch(sheetOpen, (open) => {
+  if (!import.meta.client) return
+  document.body.style.overflow = open ? 'hidden' : ''
+  if (open) window.addEventListener('keydown', onSheetKey)
+  else window.removeEventListener('keydown', onSheetKey)
+})
+onUnmounted(() => { if (import.meta.client) { document.body.style.overflow = ''; window.removeEventListener('keydown', onSheetKey) } })
 
 type Mode = 'closed' | 'open' | 'wide'
 const mode = ref<Mode>('open')
@@ -35,7 +50,23 @@ onMounted(() => {
 </script>
 
 <template>
-  <aside class="rail" :class="{ closed: mode === 'closed', wide: mode === 'wide' }">
+  <template v-if="isTablet && phone === 'sheet'">
+    <div class="sheet-bar" role="button" tabindex="0" aria-label="Open the panel" @click="sheetOpen = true" @keydown.enter="sheetOpen = true">
+      <slot name="bar" />
+    </div>
+    <Teleport to="body">
+      <div v-if="sheetOpen" class="sheet-overlay" @click="sheetOpen = false">
+        <div class="sheet" role="dialog" aria-modal="true" @click.stop>
+          <button class="sheet-handle" aria-label="Close the panel" @click="sheetOpen = false"><span /></button>
+          <div class="sheet-body"><slot :wide="false" /></div>
+        </div>
+      </div>
+    </Teleport>
+  </template>
+  <aside v-else-if="isTablet" class="rail inline">
+    <div class="body"><slot :wide="false" /></div>
+  </aside>
+  <aside v-else class="rail" :class="{ closed: mode === 'closed', wide: mode === 'wide' }">
     <div class="rail-tools">
       <button
         class="toggle"
@@ -99,7 +130,64 @@ onMounted(() => {
 
 .body { margin-top: 14px; }
 
-@media (max-width: 1100px) {
-  .rail { display: none; }
+/* ---- under 1100px: inline block or bottom sheet ---- */
+.rail.inline {
+  position: static;
+  height: auto;
+  width: 100%;
+  border-left: none;
+  border-top: 1.5px solid var(--border);
+  padding: 18px 20px 28px;
 }
+.rail.inline .body { margin-top: 0; }
+@media (max-width: 1099px) {
+  .rail:not(.inline) { display: none; }
+}
+.sheet-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+  z-index: 29;
+  background: var(--bg-card);
+  border-top: 1.5px solid var(--border);
+  box-shadow: 0 -3px 14px rgba(43, 42, 38, 0.06);
+  cursor: pointer;
+}
+@media (min-width: 760px) { .sheet-bar { bottom: 0; } }
+</style>
+
+<style>
+/* Teleported to <body>, so unscoped. */
+.sheet-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: rgba(43, 42, 38, 0.35);
+  display: flex;
+  align-items: flex-end;
+}
+.sheet {
+  width: 100%;
+  max-height: 86vh;
+  max-height: 86dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card);
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -6px 24px rgba(43, 42, 38, 0.18);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.sheet-handle {
+  flex: none;
+  width: 100%;
+  height: 28px;
+  border: none;
+  background: none;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.sheet-handle span { width: 40px; height: 4px; border-radius: 999px; background: var(--border-input); }
+.sheet-body { overflow: auto; -webkit-overflow-scrolling: touch; padding: 0 18px 24px; }
 </style>

@@ -2301,7 +2301,24 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
       </div>
     </div>
 
-    <SideRail storage-key="ynabrr:sandbox-panel">
+    <SideRail storage-key="ynabrr:sandbox-panel" phone="sheet">
+      <template #bar>
+        <div class="phone-bar">
+          <div class="phone-bar-main">
+            <div class="phone-bar-label">Remaining</div>
+            <div class="phone-bar-num" :class="{ neg: remaining < 0 }">{{ fmt(remaining) }}</div>
+          </div>
+          <div class="phone-bar-hint">
+            <template v-if="changeCount">{{ changeCount }} {{ changeCount === 1 ? 'edit' : 'edits' }}<br></template>
+            tap for the draft
+          </div>
+          <button
+            class="phone-bar-sync"
+            :disabled="!syncActions.length"
+            @click.stop="openSync"
+          >{{ canPush ? 'Sync' : 'Diff' }}<template v-if="syncActions.length"> · {{ syncActions.length }}</template></button>
+        </div>
+      </template>
       <div class="rail-head">{{ monthName }}'s scenario</div>
 
       <div class="scen">
@@ -3225,4 +3242,24 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
   .page { padding: 20px 16px 48px; }
   .head-right { margin-left: 0; }
 }
+
+/* ---- phone: sticky summary bar (SideRail sheet mode) ---- */
+.phone-bar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; }
+.phone-bar-main { display: flex; flex-direction: column; gap: 1px; }
+.phone-bar-label { font-size: 10.5px; font-weight: 800; letter-spacing: 0.6px; text-transform: uppercase; color: var(--fg-subtle); }
+.phone-bar-num { font-size: 18px; font-weight: 800; color: var(--teal-dark); font-variant-numeric: tabular-nums; }
+.phone-bar-num.neg { color: var(--danger); }
+.phone-bar-hint { flex: 1; font-size: 12px; line-height: 1.3; color: var(--fg-muted); }
+.phone-bar-sync {
+  min-height: 44px;
+  padding: 0 16px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: var(--teal);
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.phone-bar-sync:disabled { opacity: 0.45; cursor: default; }
 </style>

@@ -9,51 +9,8 @@ const collapsed = ref(false)
 const hovered = ref<string | null>(null)
 const { avatarUrl, initials } = useAvatar()
 
-const items = [
-  {
-    label: 'Tinkrr',
-    to: '/tinkrr',
-    // budget table
-    paths: [
-      { rect: { x: 3, y: 4, width: 18, height: 16, rx: 2.5 } },
-      { line: { x1: 3, y1: 9.5, x2: 21, y2: 9.5 } },
-      { line: { x1: 3, y1: 14.75, x2: 21, y2: 14.75 } },
-      { line: { x1: 14, y1: 9.5, x2: 14, y2: 20 } }
-    ]
-  },
-  {
-    label: 'Calendrr',
-    to: '/calendrr',
-    // month grid with two event dots
-    paths: [
-      { rect: { x: 3, y: 5, width: 18, height: 16, rx: 2.5 } },
-      { line: { x1: 3, y1: 10, x2: 21, y2: 10 } },
-      { line: { x1: 8, y1: 2.5, x2: 8, y2: 6.5 } },
-      { line: { x1: 16, y1: 2.5, x2: 16, y2: 6.5 } },
-      { circle: { cx: 8.5, cy: 14.5, r: 1.1, fill: 'currentColor', stroke: 'none' } },
-      { circle: { cx: 12.5, cy: 14.5, r: 1.1, fill: 'currentColor', stroke: 'none' } }
-    ]
-  },
-  {
-    label: 'Debt Colectrr',
-    to: '/debt-colectrr',
-    // descending burndown line
-    paths: [
-      { polyline: { points: '3,6 8,10 13,14 21,19' } },
-      { polyline: { points: '15.5,19 21,19 21,13.5' } }
-    ]
-  },
-  {
-    label: 'Remembrr',
-    to: '/remembrr',
-    // open ledger book
-    paths: [
-      { path: { d: 'M5 3h11a3 3 0 0 1 3 3v15H8a3 3 0 0 1-3-3Z' } },
-      { path: { d: 'M19 17H8a3 3 0 0 0-3 3' } },
-      { line: { x1: 9, y1: 8, x2: 15, y2: 8 } }
-    ]
-  }
-]
+import { NAV_ITEMS } from '~/utils/nav-items'
+const items = NAV_ITEMS
 
 function isActive (to: string) {
   return route.path === to || route.path.startsWith(to + '/')
@@ -68,7 +25,10 @@ function toggle () {
 
 onMounted(() => {
   try {
-    collapsed.value = localStorage.getItem('ynabrr:sidebar') === 'collapsed'
+    const stored = localStorage.getItem('ynabrr:sidebar')
+    // No saved preference: tablets start on the icon rail so the page gets
+    // the width; the toggle still works and is remembered.
+    collapsed.value = stored ? stored === 'collapsed' : window.matchMedia('(max-width: 1099px)').matches
   } catch { /* default to expanded */ }
 })
 </script>
@@ -335,4 +295,5 @@ onMounted(() => {
 }
 
 .email { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 759px) { .shell { display: none; } }
 </style>
