@@ -10,6 +10,8 @@
 //   move         PATCH /plans/{p}/categories/{c}             { category_group_id }
 //   create-group POST  /plans/{p}/category_groups            { name } → id
 //   create-cat   POST  /plans/{p}/categories                 { name, group, goal_target? } → id
+//                (a cadence/date/style target needs a follow-up PATCH — the
+//                create endpoint only accepts a bare goal_target)
 //
 // NOT in YNAB's API (the client lists these as "stays local"): hiding/removing
 // categories, and moving a category between budgets.
@@ -23,7 +25,14 @@ type PushAction =
   | { kind: 'rename', categoryId: string, name: string }
   | { kind: 'move', categoryId: string, groupId: string }
   | { kind: 'create-group', name: string }
-  | { kind: 'create-cat', name: string, groupId: string, goalTarget?: number | null }
+  | {
+    kind: 'create-cat', name: string, groupId: string,
+    goalTarget?: number | null,
+    // same target vocabulary as set-target, applied to the newborn category
+    frequency?: 'monthly' | 'weekly' | 'yearly' | null,
+    targetDate?: string | null,
+    needsWholeAmount?: boolean | null
+  }
   | { kind: 'set-goal', categoryId: string, goalTarget: number }
   | {
     kind: 'set-target', categoryId: string,
@@ -56,6 +65,34 @@ function cleanUuid (value: unknown, label: string): string {
     throw createError({ statusCode: 400, statusMessage: `${label} must be a YNAB id` })
   }
   return value
+}
+
+// The goal fields for a non-null target — shared by set-target and the
+// create-cat follow-up PATCH.
+function goalShape (goalTarget: number, opts: {
+  frequency?: 'monthly' | 'weekly' | 'yearly' | null,
+  targetDate?: string | null,
+  needsWholeAmount?: boolean | null
+}): Record<string, unknown> {
+  const category: Record<string, unknown> = { goal_target: cleanAmount(goalTarget) }
+  if (opts.frequency) {
+    if (!['monthly', 'weekly', 'yearly'].includes(opts.frequency)) {
+      throw createError({ statusCode: 400, statusMessage: 'Target cadence must be monthly, weekly, or yearly' })
+    }
+    if (opts.targetDate) {
+      throw createError({ statusCode: 400, statusMessage: 'A target has either a cadence or a date, not both' })
+    }
+    category.goal_frequency = opts.frequency
+  } else if (opts.targetDate) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(opts.targetDate)) {
+      throw createError({ statusCode: 400, statusMessage: 'Target date must be an ISO date' })
+    }
+    category.goal_target_date = opts.targetDate
+  }
+  if (typeof opts.needsWholeAmount === 'boolean') {
+    category.goal_needs_whole_amount = opts.needsWholeAmount
+  }
+  return category
 }
 
 export default defineEventHandler(async (event) => {
@@ -106,29 +143,9 @@ export default defineEventHandler(async (event) => {
         // The full target vocabulary the API can express: recurring NEED
         // (weekly/monthly/yearly, set-aside or refill), by-date, or removal.
         const categoryId = cleanUuid(action.categoryId, 'category')
-        const category: Record<string, unknown> = {}
-        if (action.goalTarget === null) {
-          category.goal_target = null
-        } else {
-          category.goal_target = cleanAmount(action.goalTarget)
-          if (action.frequency) {
-            if (!['monthly', 'weekly', 'yearly'].includes(action.frequency)) {
-              throw createError({ statusCode: 400, statusMessage: 'Target cadence must be monthly, weekly, or yearly' })
-            }
-            if (action.targetDate) {
-              throw createError({ statusCode: 400, statusMessage: 'A target has either a cadence or a date, not both' })
-            }
-            category.goal_frequency = action.frequency
-          } else if (action.targetDate) {
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(action.targetDate)) {
-              throw createError({ statusCode: 400, statusMessage: 'Target date must be an ISO date' })
-            }
-            category.goal_target_date = action.targetDate
-          }
-          if (typeof action.needsWholeAmount === 'boolean') {
-            category.goal_needs_whole_amount = action.needsWholeAmount
-          }
-        }
+        const category = action.goalTarget === null
+          ? { goal_target: null }
+          : goalShape(action.goalTarget, action)
         await ynabApi(pat, `/plans/${plan}/categories/${categoryId}`, {
           method: 'PATCH',
           body: { category }
@@ -164,14 +181,28 @@ export default defineEventHandler(async (event) => {
           name: cleanName(action.name),
           category_group_id: cleanUuid(action.groupId, 'group')
         }
-        if (typeof action.goalTarget === 'number' && action.goalTarget > 0) {
-          category.goal_target = cleanAmount(action.goalTarget)
+        const hasTarget = typeof action.goalTarget === 'number' && action.goalTarget > 0
+        // Anything beyond a bare monthly amount can't ride on the POST —
+        // build (and validate) the follow-up PATCH before creating anything.
+        const richTarget = hasTarget && (
+          action.frequency === 'weekly' || action.frequency === 'yearly'
+          || Boolean(action.targetDate) || typeof action.needsWholeAmount === 'boolean'
+        )
+        const patchShape = richTarget ? goalShape(action.goalTarget as number, action) : null
+        if (hasTarget && !patchShape) {
+          category.goal_target = cleanAmount(action.goalTarget as number)
         }
         const res = await ynabApi<{ category?: { id?: string } }>(pat, `/plans/${plan}/categories`, {
           method: 'POST',
           body: { category }
         })
         createdId = res.category?.id ?? null
+        if (patchShape && createdId) {
+          await ynabApi(pat, `/plans/${plan}/categories/${createdId}`, {
+            method: 'PATCH',
+            body: { category: patchShape }
+          })
+        }
         break
       }
       default:

@@ -157,8 +157,9 @@ const INCOME_KEY = '__income__'
 // goalMonthly — the Goal label, rollups, Required, hero pill, Difference —
 // sees the drafted shape, while rawGoalMonthly keeps YNAB's truth for
 // before/after displays and sync details.
+// What-if rows draft targets too — theirs ride along on the create-cat push.
 const targetDraftFor = (category: Category): TargetDraft | undefined =>
-  isCustom(category) ? undefined : structure.targets.value[category.id]
+  structure.targets.value[category.id]
 
 function effectiveGoalCategory (category: Category): Category {
   const draft = targetDraftFor(category)
@@ -198,6 +199,14 @@ function targetDiffers (category: Category): boolean {
     return category.goal_target !== draft.target || category.goal_target_date !== draft.targetDate
   }
   const wantCadence = draft.frequency === 'weekly' ? 2 : draft.frequency === 'yearly' ? 13 : 1
+  // Monthly is every month: MF, DEBT, and cadence-less NEED goals already
+  // repeat monthly, so a monthly draft only differs by amount — an unchanged
+  // save must not derive a phantom "rewrite as NEED" push.
+  const plainMonthly = !category.goal_target_date && (
+    category.goal_type === 'MF' || category.goal_type === 'DEBT'
+    || (category.goal_type === 'NEED' && (category.goal_cadence == null || category.goal_cadence === 0))
+  )
+  if (plainMonthly && wantCadence === 1) return category.goal_target !== draft.target
   return category.goal_target !== draft.target
     || category.goal_type !== 'NEED'
     || category.goal_cadence !== wantCadence
@@ -661,6 +670,13 @@ function onCustomNameChange (id: string, event: Event) {
   renameCustom(id, (event.target as HTMLInputElement).value)
 }
 
+// ✕ on a what-if row: the row and every overlay keyed to it (target draft,
+// layout claim) go together — orphaned entries would haunt localStorage.
+function discardCustomRow (id: string) {
+  structure.scrubCategory(id)
+  removeCustom(id)
+}
+
 function resetEverything () {
   resetAll()
   structure.resetStructure()
@@ -684,7 +700,7 @@ function exportCsv () {
           csvEscape(section.planName),
           csvEscape(group.name),
           csvEscape(catName(category) || 'What-if row'),
-          isCustom(category) ? '' : money(goalMonthly(category)),
+          isCustom(category) && !targetDraftFor(category) ? '' : money(goalMonthly(category)),
           money(effectiveMonthly(category)),
           money(effectiveDelta(category)),
           isOff(category) ? 'no' : 'yes'
@@ -893,10 +909,15 @@ const realGroupIds = computed(() => {
   return map
 })
 
-// Only simple monthly targets can honestly become the category's goal.
+// Goals that already repeat monthly (MF, monthly or cadence-less NEED) — a
+// Monthly-column edit updates these in place; anything else gets reshaped,
+// and the review says so.
 const simpleMonthlyGoal = (category: Category) =>
   category.goal_type === 'MF' ||
-  (category.goal_type === 'NEED' && category.goal_cadence === 1 && (category.goal_cadence_frequency ?? 1) === 1)
+  (category.goal_type === 'NEED' && !category.goal_target_date && (
+    category.goal_cadence == null || category.goal_cadence === 0
+    || (category.goal_cadence === 1 && (category.goal_cadence_frequency ?? 1) === 1)
+  ))
 
 const syncDerivation = computed(() => {
   const actions: SyncAction[] = []
@@ -937,6 +958,12 @@ const syncDerivation = computed(() => {
           const name = catName(category).trim()
           if (!name) { unnamedCustom++; continue }
           const draft = drafts.value[category.id]
+          // A drafted target becomes the newborn category's goal; without one,
+          // the Monthly amount becomes a plain monthly target.
+          const rowTarget = targetDraftFor(category)
+          const withTarget = rowTarget && rowTarget.target !== null ? rowTarget : undefined
+          const detail = `in ${section.planName} · ${group.name}`
+            + (withTarget ? ` · target ${targetDraftLabel(withTarget)}` : draft ? ` · ${fmt(draft)} / month` : '')
           if (!sectionPush) {
             bump(section.planId)
             actions.push({
@@ -944,7 +971,7 @@ const syncDerivation = computed(() => {
               aid: `new-${category.id}`,
               kind: 'create-cat',
               title: `Create “${name}”`,
-              detail: `in ${section.planName} · ${group.name}` + (draft ? ` · ${fmt(draft)} / month` : ''),
+              detail,
               sourceId: section.planId,
               exec: { name, localId: category.id }
             })
@@ -954,14 +981,15 @@ const syncDerivation = computed(() => {
             aid: `new-${category.id}`,
             kind: 'create-cat',
             title: `Create “${name}”`,
-            detail: `in ${section.planName} · ${group.name}` + (draft ? ` · ${fmt(draft)} / month` : ''),
+            detail,
             sourceId: section.planId,
             exec: {
               name,
               localId: category.id,
               groupId: group.custom ? undefined : realGroupIds.value.get(`${section.planId}::${group.key}`),
               groupRef: group.custom ? group.key : undefined,
-              goalTarget: draft ?? null
+              goalTarget: draft ?? null,
+              targetDraft: withTarget
             },
             dependsOn: group.custom ? `grp-${section.planId}-${group.key}` : undefined
           })
@@ -1350,7 +1378,18 @@ async function doSync () {
         case 'create-cat': {
           const groupId = resolveGroupId(action)
           if (!isMock.value && !groupId) throw new Error(`No YNAB group to put “${action.exec.name}” in`)
-          body = { kind: 'create-cat', name: action.exec.name, groupId: groupId ?? '00000000-0000-4000-8000-000000000000', goalTarget: action.exec.goalTarget ?? undefined }
+          // A drafted target shape (cadence/date/style) trumps the bare
+          // monthly amount — the server applies it to the newborn category.
+          const rowTarget = action.exec.targetDraft
+          body = {
+            kind: 'create-cat',
+            name: action.exec.name,
+            groupId: groupId ?? '00000000-0000-4000-8000-000000000000',
+            goalTarget: (rowTarget ? rowTarget.target : action.exec.goalTarget) ?? undefined,
+            frequency: rowTarget && rowTarget.target !== null && !rowTarget.targetDate ? (rowTarget.frequency ?? 'monthly') : undefined,
+            targetDate: rowTarget?.targetDate ?? undefined,
+            needsWholeAmount: typeof rowTarget?.needsWholeAmount === 'boolean' ? rowTarget.needsWholeAmount : undefined
+          }
           break
         }
         case 'move': {
@@ -1432,6 +1471,7 @@ async function doSync () {
       structure.releaseClaim(action.exec.categoryId!)
     } else if (action.kind === 'create-cat' && action.exec.localId) {
       structure.releaseClaim(action.exec.localId)
+      structure.clearTarget(action.exec.localId)
       removeCustom(action.exec.localId)
     } else if (action.kind === 'create-group' && action.exec.groupRef) {
       structure.renameLayoutKey(`${action.sourceId}::${action.exec.groupRef}`, `${action.sourceId}::${action.exec.name}`)
@@ -1464,7 +1504,6 @@ const editingTargetCategory = computed(() =>
   targetEditor.value ? visibleCategories.value.find(c => c.id === targetEditor.value!.categoryId) ?? null : null)
 
 function openTargetEditor (category: Category) {
-  if (isCustom(category)) return
   const draft = targetDraftFor(category)
   let cadence: EditorCadence
   let amount = 0
@@ -1477,15 +1516,23 @@ function openTargetEditor (category: Category) {
     else if (draft.targetDate) { cadence = 'bydate'; date = draft.targetDate }
     else cadence = draft.frequency ?? 'monthly'
     if (typeof draft.needsWholeAmount === 'boolean') needs = draft.needsWholeAmount ? 'aside' : 'refill'
+  } else if (isCustom(category)) {
+    // A what-if row has no YNAB goal to mirror — start a fresh monthly
+    // target, seeded from whatever amount the row already carries.
+    cadence = 'monthly'
+    amount = drafts.value[category.id] ?? 0
   } else {
     amount = category.goal_target ?? 0
     const cad = category.goal_cadence
     const freq = category.goal_cadence_frequency ?? 1
     if (!category.goal_type || !category.goal_target) cadence = 'none'
-    else if (cad === 1 && freq === 1) cadence = 'monthly'
     else if (cad === 2 && freq === 1) cadence = 'weekly'
     else if (cad === 13 && freq === 1) cadence = 'yearly'
     else if ((cad == null || cad === 0) && category.goal_target_date) { cadence = 'bydate'; date = category.goal_target_date }
+    else if (category.goal_type === 'TB') { cadence = 'custom'; customLabel = 'Build to a balance (YNAB-only)' }
+    // Monthly is every month: MF, DEBT, and cadence-less goals are plain
+    // monthly targets, not a frozen "(YNAB-only)" shape.
+    else if (cadenceLabel(category) === '/ month') cadence = 'monthly'
     else { cadence = 'custom'; customLabel = `${cadenceLabel(category).replace('/ ', 'Every ')} (YNAB-only)` }
   }
   targetEditor.value = {
@@ -1632,8 +1679,20 @@ function rawTargetLabel (category: Category) {
 // What the Goal cell shows: the drafted shape when one exists, YNAB's otherwise.
 function goalCellLabel (category: Category) {
   const draft = targetDraftFor(category)
-  if (!draft) return goalLabel(category) || 'no target'
-  return targetDraftLabel(draft)
+  if (draft) return targetDraftLabel(draft)
+  if (isCustom(category)) return 'add a target…'
+  return goalLabel(category) || 'no target'
+}
+
+function goalCellTitle (category: Category) {
+  if (isCustom(category)) {
+    return targetDraftFor(category)
+      ? 'Target for this new category — written to YNAB when the row is created. Click to edit.'
+      : 'Give this what-if row a target'
+  }
+  return targetDraftFor(category)
+    ? `Target drafted here only — YNAB still says ${rawTargetLabel(category)}. Click to edit.`
+    : "Edit this category's target"
 }
 
 function targetActionDetail (category: Category, draft: TargetDraft) {
@@ -1870,81 +1929,78 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
                       </template>
                     </div>
                     <div class="soft goal-cell">
-                      <template v-if="isCustom(category)">what-if row</template>
-                      <template v-else>
-                        <button
-                          class="goal-btn"
-                          :class="{ drafted: Boolean(targetDraftFor(category)) }"
-                          :title="targetDraftFor(category) ? `Target drafted here only — YNAB still says ${rawTargetLabel(category)}. Click to edit.` : `Edit this category's target`"
-                          @click.stop="targetEditor?.categoryId === category.id ? closeTargetEditor() : openTargetEditor(category)"
-                        >
-                          <span class="goal-btn-text">{{ goalCellLabel(category) }}<span v-if="targetDraftFor(category)" class="goal-draft-mark"> · draft</span></span>
-                          <svg class="goal-pen" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /></svg>
-                        </button>
-                        <div
-                          v-if="targetEditor && targetEditor.categoryId === category.id"
-                          class="target-pop"
-                          role="dialog"
-                          :aria-label="`Target for ${catName(category)}`"
-                          @click.stop
-                          @keydown.escape.stop.prevent="closeTargetEditor"
-                        >
-                          <label class="tp-field">Amount
-                            <input
-                              id="target-amount-input"
-                              v-model="targetEditor.amount"
-                              type="text"
-                              inputmode="decimal"
-                              placeholder="$"
-                              title="Does math: 600/12, +25"
-                              :disabled="targetEditor.cadence === 'none' || targetEditor.cadence === 'custom'"
-                              @keydown.enter.prevent="saveTargetDraft"
-                            >
-                          </label>
-                          <label class="tp-field">Cadence
-                            <select v-model="targetEditor.cadence">
-                              <option value="monthly">Monthly</option>
-                              <option value="weekly">Weekly</option>
-                              <option value="yearly">Yearly</option>
-                              <option value="bydate">By date</option>
-                              <option value="none">No target</option>
-                              <option v-if="targetEditor.customLabel" value="custom" disabled>{{ targetEditor.customLabel }}</option>
-                            </select>
-                          </label>
-                          <label v-if="targetEditor.cadence === 'bydate'" class="tp-field">Target date
-                            <input v-model="targetEditor.date" type="date">
-                          </label>
-                          <div v-if="['monthly', 'weekly', 'yearly'].includes(targetEditor.cadence)" class="tp-field">
-                            <span class="tp-label">Style</span>
-                            <div class="tp-pills">
-                              <button
-                                class="tp-pill"
-                                :class="{ on: targetEditor.needs === 'aside' }"
-                                title="Needs the full amount again every period"
-                                @click="targetEditor.needs = targetEditor.needs === 'aside' ? null : 'aside'"
-                              >Set aside another</button>
-                              <button
-                                class="tp-pill"
-                                :class="{ on: targetEditor.needs === 'refill' }"
-                                title="Tops the balance back up to the target"
-                                @click="targetEditor.needs = targetEditor.needs === 'refill' ? null : 'refill'"
-                              >Refill up to</button>
-                            </div>
-                          </div>
-                          <div v-if="targetEditor.cadence === 'custom'" class="tp-hint">
-                            YNAB's API can't write every-N-months targets — convert it below (or pick another cadence) to make it syncable.
-                          </div>
-                          <div v-if="editorConvertible && editorMonthly" class="tp-convert">
-                            <span>≈ {{ fmt(editorMonthly) }} / month</span>
-                            <button class="tp-convert-btn" @click="convertToMonthly">Convert to monthly {{ fmt(editorMonthly) }}</button>
-                          </div>
-                          <div class="tp-actions">
-                            <button class="tp-save" :disabled="!editorSavable" @click="saveTargetDraft">Save target</button>
-                            <button class="tp-remove" @click="removeTargetDraft">Remove target</button>
-                            <button class="tp-cancel" @click="closeTargetEditor">Cancel</button>
+                      <button
+                        class="goal-btn"
+                        :class="{ drafted: Boolean(targetDraftFor(category)) }"
+                        :title="goalCellTitle(category)"
+                        @click.stop="targetEditor?.categoryId === category.id ? closeTargetEditor() : openTargetEditor(category)"
+                      >
+                        <span class="goal-btn-text">{{ goalCellLabel(category) }}<span v-if="targetDraftFor(category)" class="goal-draft-mark"> · draft</span></span>
+                        <svg class="goal-pen" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /></svg>
+                      </button>
+                      <div
+                        v-if="targetEditor && targetEditor.categoryId === category.id"
+                        class="target-pop"
+                        role="dialog"
+                        :aria-label="`Target for ${catName(category) || 'this what-if row'}`"
+                        @click.stop
+                        @keydown.escape.stop.prevent="closeTargetEditor"
+                      >
+                        <label class="tp-field">Amount
+                          <input
+                            id="target-amount-input"
+                            v-model="targetEditor.amount"
+                            type="text"
+                            inputmode="decimal"
+                            placeholder="$"
+                            title="Does math: 600/12, +25"
+                            :disabled="targetEditor.cadence === 'none' || targetEditor.cadence === 'custom'"
+                            @keydown.enter.prevent="saveTargetDraft"
+                          >
+                        </label>
+                        <label class="tp-field">Cadence
+                          <select v-model="targetEditor.cadence">
+                            <option value="monthly">Monthly</option>
+                            <option value="weekly">Weekly</option>
+                            <option value="yearly">Yearly</option>
+                            <option value="bydate">By date</option>
+                            <option value="none">No target</option>
+                            <option v-if="targetEditor.customLabel" value="custom" disabled>{{ targetEditor.customLabel }}</option>
+                          </select>
+                        </label>
+                        <label v-if="targetEditor.cadence === 'bydate'" class="tp-field">Target date
+                          <input v-model="targetEditor.date" type="date">
+                        </label>
+                        <div v-if="['monthly', 'weekly', 'yearly'].includes(targetEditor.cadence)" class="tp-field">
+                          <span class="tp-label">Style</span>
+                          <div class="tp-pills">
+                            <button
+                              class="tp-pill"
+                              :class="{ on: targetEditor.needs === 'aside' }"
+                              title="Needs the full amount again every period"
+                              @click="targetEditor.needs = targetEditor.needs === 'aside' ? null : 'aside'"
+                            >Set aside another</button>
+                            <button
+                              class="tp-pill"
+                              :class="{ on: targetEditor.needs === 'refill' }"
+                              title="Tops the balance back up to the target"
+                              @click="targetEditor.needs = targetEditor.needs === 'refill' ? null : 'refill'"
+                            >Refill up to</button>
                           </div>
                         </div>
-                      </template>
+                        <div v-if="targetEditor.cadence === 'custom'" class="tp-hint">
+                          YNAB's API can't write this target shape — convert it below (or pick another cadence) to make it syncable.
+                        </div>
+                        <div v-if="editorConvertible && editorMonthly" class="tp-convert">
+                          <span>≈ {{ fmt(editorMonthly) }} / month</span>
+                          <button class="tp-convert-btn" @click="convertToMonthly">Convert to monthly {{ fmt(editorMonthly) }}</button>
+                        </div>
+                        <div class="tp-actions">
+                          <button class="tp-save" :disabled="!editorSavable" @click="saveTargetDraft">Save target</button>
+                          <button class="tp-remove" @click="removeTargetDraft">Remove target</button>
+                          <button class="tp-cancel" @click="closeTargetEditor">Cancel</button>
+                        </div>
+                      </div>
                     </div>
                     <div class="right monthly-cell">
                       <input
@@ -1964,7 +2020,7 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
                         v-if="isCustom(category)"
                         class="mini-act"
                         title="Remove this what-if row"
-                        @click="removeCustom(category.id)"
+                        @click="discardCustomRow(category.id)"
                       >✕</button>
                       <button
                         v-else
@@ -2241,7 +2297,7 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
                 v-if="isCustom(category)"
                 class="undo"
                 title="Remove this what-if row"
-                @click="removeCustom(category.id)"
+                @click="discardCustomRow(category.id)"
               >✕</button>
               <button
                 v-else
@@ -2263,13 +2319,13 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
             </div>
             <div v-for="category in targetChanges" :key="`tgt-${category.id}`" class="change">
               <div class="change-main">
-                <div class="change-name"><template v-if="multiPlan">{{ planNameByCategory.get(category.id) }} · </template>{{ catName(category) }}</div>
+                <div class="change-name"><template v-if="multiPlan">{{ planNameByCategory.get(category.id) }} · </template>{{ catName(category) || 'What-if row' }}</div>
                 <div class="change-detail">target: {{ rawTargetLabel(category) }} → {{ targetDraftLabel(targetDraftFor(category)!) }}</div>
               </div>
               <span :class="pillClass(goalMonthly(category) - rawGoalMonthly(category))">
                 {{ goalMonthly(category) !== rawGoalMonthly(category) ? fmtDelta(goalMonthly(category) - rawGoalMonthly(category)) : '—' }}
               </span>
-              <button class="undo" :title="`Back to YNAB's ${rawTargetLabel(category)}`" @click="structure.clearTarget(category.id)">↺</button>
+              <button class="undo" :title="isCustom(category) ? 'Remove this target' : `Back to YNAB's ${rawTargetLabel(category)}`" @click="structure.clearTarget(category.id)">↺</button>
             </div>
             <div class="rail-note">Saved in this browser only — nothing is sent to YNAB.</div>
           </div>
