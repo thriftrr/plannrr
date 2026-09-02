@@ -50,8 +50,15 @@ A signed-in user can connect budgets two ways:
    "- Plan.csv" and older "- Budget.csv" formats parse; monthly income is
    derived from Register inflows. Exports carry no goals, so each category's
    assigned amount becomes its monthly baseline in the sandbox.
-2. **Save a personal access token** — stored AES-256-GCM encrypted, used only
-   server-side to pull budgets live from the YNAB API.
+2. **Sign in with YNAB** (OAuth, Authorization Code + PKCE) — the way a public
+   instance should connect: the person approves Plannrr on YNAB's own page,
+   tokens are stored AES-256-GCM encrypted and refreshed server-side. Needs
+   `NUXT_YNAB_CLIENT_ID` / `NUXT_YNAB_CLIENT_SECRET` from an OAuth application
+   created under YNAB → Account Settings → Developer, with redirect URI
+   `<NUXT_APP_ORIGIN>/api/ynab/oauth/callback`. New OAuth apps are capped at
+   25 users until YNAB reviews them.
+3. **Paste a personal access token** — for your own self-hosted copy. YNAB's
+   terms keep tokens with their owner, so a public instance should offer OAuth.
 
 `NUXT_YNAB_PERSONAL_ACCESS_TOKEN` in `.env` still works as a personal
 single-user mode (no sign-in needed), and `make up-mock` remains the
@@ -99,6 +106,12 @@ The magic-link flow needs an email transport in production, so onboard a
 sending domain before inviting anyone.
 
 ## Security notes for self-hosters
+
+- **YNAB's API terms** require the affiliation disclaimer in the footer (it's
+  in `LegalLine.vue`, shown on every page) and, for OAuth apps, a published
+  privacy policy (`/privacy`) with a way to delete data (the account page's
+  "Delete my account", which wipes D1 rows, KV snapshots, and the R2 avatar).
+  Edit the policy's contact address before hosting your own copy.
 
 - **Set `NUXT_APP_ORIGIN`.** Production refuses to send magic links without
   it, because a link built from the request's Host header could be pointed at

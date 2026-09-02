@@ -64,6 +64,13 @@
       "when": 1788365774272,
       "tag": "0008_palette",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1788369369916,
+      "tag": "0009_ynab_oauth",
+      "breakpoints": true
     }
   ]
 }

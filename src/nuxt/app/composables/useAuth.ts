@@ -3,6 +3,8 @@ export interface AuthUser {
   // decided server-side from NUXT_ADMIN_EMAILS; the API is the real gate
   isAdmin: boolean
   hasPat: boolean
+  ynabAuth: 'oauth' | 'pat' | null
+  ynabOauthAvailable: boolean
   firstName: string | null
   lastName: string | null
   currency: string

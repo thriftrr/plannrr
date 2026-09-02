@@ -3,15 +3,8 @@ import { and, desc, eq, gt, isNull, lt, sql } from 'drizzle-orm'
 // Queries over the NuxtHub drizzle client (`db` and `schema` are
 // auto-imported server globals provided by @nuxthub/core).
 
-export interface DbUser {
-  id: string
-  email: string
-  patCipher: string | null
-  firstName: string | null
-  lastName: string | null
-  currency: string
-  avatarKey: string | null
-}
+// One row of `users`, exactly as drizzle infers it from the schema.
+export type DbUser = typeof schema.users.$inferSelect
 
 export interface ImportedPlanRow {
   id: string
@@ -39,7 +32,9 @@ export async function ensureUser (email: string): Promise<DbUser> {
   }
   const id = crypto.randomUUID()
   await db.insert(schema.users).values({ id, email }).run()
-  return { id, email, patCipher: null, firstName: null, lastName: null, currency: 'USD', avatarKey: null }
+  const created = await db.select().from(schema.users).where(eq(schema.users.id, id)).get()
+  if (!created) throw createError({ statusCode: 500, statusMessage: 'Could not create the account' })
+  return created
 }
 
 export async function getUserById (id: string): Promise<DbUser | null> {
@@ -65,6 +60,24 @@ export async function setUserAvatarKey (id: string, avatarKey: string | null): P
 
 export async function setUserPat (id: string, patCipher: string | null): Promise<void> {
   await db.update(schema.users).set({ patCipher }).where(eq(schema.users.id, id)).run()
+}
+
+export async function setUserYnabOauth (
+  id: string,
+  tokens: { ynabRefreshCipher: string | null, ynabAccessCipher: string | null, ynabAccessExpiresAt: string | null }
+): Promise<void> {
+  await db.update(schema.users).set(tokens).where(eq(schema.users.id, id)).run()
+}
+
+// Every D1 row the user owns, then the user. KV/R2 cleanup happens in the
+// endpoint, which knows the keys.
+export async function deleteEverythingForUser (id: string, email: string): Promise<void> {
+  await db.delete(schema.debts).where(eq(schema.debts.userId, id)).run()
+  await db.delete(schema.importedPlans).where(eq(schema.importedPlans.userId, id)).run()
+  await db.delete(schema.storyEvents).where(eq(schema.storyEvents.userId, id)).run()
+  await db.delete(schema.feedback).where(eq(schema.feedback.userId, id)).run()
+  await db.delete(schema.loginTokens).where(eq(schema.loginTokens.email, email)).run()
+  await db.delete(schema.users).where(eq(schema.users.id, id)).run()
 }
 
 export async function insertLoginToken (tokenHash: string, email: string, expiresAt: string): Promise<void> {

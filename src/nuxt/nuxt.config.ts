@@ -86,8 +86,14 @@ export default defineNuxtConfig({
     cfAccountId: '',
     cfEmailToken: '',
     emailFrom: '',
-    // absolute origin for emailed links; defaults to the request origin
+    // absolute origin for emailed links and the OAuth redirect URI; required
+    // in production
     appOrigin: '',
+    // "Sign in with YNAB": an OAuth application from YNAB → Account Settings →
+    // Developer. Redirect URI must be <NUXT_APP_ORIGIN>/api/ynab/oauth/callback.
+    // Leave blank and the account page offers the personal-token path only.
+    ynabClientId: '',
+    ynabClientSecret: '',
     // comma-separated emails that see the feedback inbox and get notified
     // when feedback arrives (NUXT_ADMIN_EMAILS). Nobody is admin until set.
     adminEmails: '',

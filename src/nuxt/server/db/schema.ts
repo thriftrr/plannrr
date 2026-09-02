@@ -5,6 +5,11 @@ export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
   email: text('email').notNull().unique(),
   patCipher: text('pat_cipher'),
+  // "Sign in with YNAB" (OAuth): refresh + current access token, encrypted
+  // like the PAT; the access token is refreshed just before it expires.
+  ynabRefreshCipher: text('ynab_refresh_cipher'),
+  ynabAccessCipher: text('ynab_access_cipher'),
+  ynabAccessExpiresAt: text('ynab_access_expires_at'),
   firstName: text('first_name'),
   lastName: text('last_name'),
   // ISO 4217. Applies to hand-tracked debts and no-YNAB mode; synced budgets

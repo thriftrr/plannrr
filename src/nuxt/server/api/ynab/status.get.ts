@@ -7,7 +7,7 @@ export default defineEventHandler(async (event) => {
     mock: Boolean(ynabMock),
     authenticated: Boolean(user),
     email: user?.email ?? null,
-    hasPat: Boolean(user?.patCipher),
+    hasPat: Boolean(user?.patCipher || user?.ynabRefreshCipher),
     hasEnvPat: Boolean(ynabPersonalAccessToken)
   }
 })

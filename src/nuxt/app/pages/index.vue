@@ -254,6 +254,7 @@ const icon = {
       </div>
       <a href="https://ko-fi.com/tubstrr" target="_blank" rel="noopener" class="kofi">Support tubstrr on Ko-fi →</a>
     </footer>
+    <LegalLine />
   </main>
 </template>
 

@@ -19,9 +19,14 @@ export async function resolvePat (event: H3Event): Promise<string | null> {
   const user = await getSessionUser(event)
   if (user) {
     const dbUser = await getUserById(user.id)
-    if (dbUser?.patCipher) {
-      const pat = decryptSecret(dbUser.patCipher)
-      if (pat) return pat
+    if (dbUser) {
+      // "Sign in with YNAB" wins; a pasted token is the fallback.
+      const oauth = await resolveOauthAccessToken(dbUser)
+      if (oauth) return oauth
+      if (dbUser.patCipher) {
+        const pat = decryptSecret(dbUser.patCipher)
+        if (pat) return pat
+      }
     }
   }
   // The env PAT is a dev/personal-mode convenience ONLY. In production it must

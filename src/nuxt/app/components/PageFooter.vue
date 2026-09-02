@@ -2,6 +2,7 @@
   <div class="foot">
     Made with ☕ —
     <a href="https://ko-fi.com/tubstrr" target="_blank" rel="noopener">support tubstrr on Ko-fi</a>
+    <LegalLine />
   </div>
 </template>
 

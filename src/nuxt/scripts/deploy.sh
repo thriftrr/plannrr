@@ -68,7 +68,7 @@ echo "── deploy"
 # Non-secret runtime config rides along as plain vars; secrets come from
 # `make secrets` and persist across deploys.
 vars=()
-for key in NUXT_ADMIN_EMAILS NUXT_EMAIL_FROM NUXT_APP_ORIGIN NUXT_CF_ACCOUNT_ID; do
+for key in NUXT_ADMIN_EMAILS NUXT_EMAIL_FROM NUXT_APP_ORIGIN NUXT_CF_ACCOUNT_ID NUXT_YNAB_CLIENT_ID; do
   [ -n "${!key:-}" ] && vars+=(--var "$key:${!key}")
 done
 npx wrangler --cwd .output deploy "${vars[@]}"

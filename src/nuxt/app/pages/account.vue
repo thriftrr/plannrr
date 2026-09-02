@@ -56,13 +56,53 @@ function syncFromUser () {
   currency.value = user.value?.currency ?? 'USD'
 }
 
+const route = useRoute()
+const router = useRouter()
+
 onMounted(async () => {
   await refresh()
   // Signed-out visitors never reach this page — auth.global.ts redirects them.
   if (!user.value) return
   syncFromUser()
   await Promise.all([loadLastSynced(), loadSources()])
+  // Back from YNAB's authorize screen (see server/api/ynab/oauth/callback).
+  const outcome = route.query.ynab
+  if (typeof outcome === 'string') {
+    if (outcome === 'connected') {
+      patMessage.value = 'Connected to YNAB — now pick which budgets to import.'
+      await openPicker()
+    } else if (outcome === 'denied') {
+      patMessage.value = 'No problem — nothing was connected.'
+    } else if (outcome === 'expired') {
+      patMessage.value = 'That sign-in took too long or lost its session — try again.'
+    } else {
+      patMessage.value = 'YNAB did not finish the sign-in — try again in a moment.'
+    }
+    router.replace({ query: {}, hash: '#ynab-token' })
+  }
 })
+
+// ---- Delete account -------------------------------------------------------
+const deleteOpen = ref(false)
+const deleteConfirm = ref('')
+const deleteBusy = ref(false)
+const deleteError = ref('')
+const canDelete = computed(() => !deleteBusy.value && deleteConfirm.value.trim().toLowerCase() === (user.value?.email ?? '').toLowerCase())
+
+async function deleteAccount () {
+  if (!canDelete.value) return
+  deleteBusy.value = true
+  deleteError.value = ''
+  try {
+    await $fetch('/api/account', { method: 'DELETE', body: { confirm: deleteConfirm.value } })
+    user.value = null
+    await navigateTo('/login')
+  } catch (cause: unknown) {
+    const err = cause as { data?: { statusMessage?: string } }
+    deleteError.value = err.data?.statusMessage ?? 'Could not delete the account — try again.'
+    deleteBusy.value = false
+  }
+}
 
 async function saveProfile () {
   if (profileBusy.value) return
@@ -326,7 +366,7 @@ async function removePat () {
   patMessage.value = ''
   try {
     await $fetch('/api/account/pat', { method: 'DELETE' })
-    patMessage.value = 'Token removed.'
+    patMessage.value = 'Disconnected from YNAB. Your imported budgets stay until you remove them.'
     await refresh()
   } finally {
     patBusy.value = false
@@ -474,26 +514,58 @@ async function signOut () {
 
       <section id="ynab-token" class="y-card">
         <div class="head-row">
-          <div class="y-card-title">YNAB access token</div>
-          <span v-if="user.hasPat" class="y-badge">Connected</span>
+          <div class="y-card-title">Connect YNAB</div>
+          <span v-if="user.hasPat" class="y-badge">{{ user.ynabAuth === 'oauth' ? 'Connected · Sign in with YNAB' : 'Connected · token' }}</span>
         </div>
-        <p class="y-body">
-          Pulls your budgets live from YNAB. Create a personal access token under
-          <a href="https://app.ynab.com/settings/developer" target="_blank" rel="noopener">YNAB → Account Settings → Developer</a>.
-          It's stored encrypted and only ever used server-side.
-        </p>
-        <form class="row" @submit.prevent="savePat">
-          <input
-            v-model="pat"
-            class="y-input grow"
-            type="password"
-            :placeholder="user.hasPat ? 'Replace saved token…' : 'Paste your token…'"
-            aria-label="YNAB personal access token"
-            autocomplete="off"
-          >
-          <button class="y-btn" type="submit" :disabled="patBusy || !pat.trim()">Save</button>
-          <button v-if="user.hasPat" class="y-btn-secondary" type="button" :disabled="patBusy" @click="removePat">Remove</button>
-        </form>
+        <template v-if="user.ynabOauthAvailable">
+          <p class="y-body">
+            Pulls your budgets live from YNAB. You'll approve Plannrr on YNAB's own page — no
+            token to copy, and you can revoke it there any time. Access is only ever used
+            server-side and never shown to anyone.
+          </p>
+          <div class="row">
+            <a class="y-btn oauth-btn" href="/api/ynab/oauth/start">{{ user.ynabAuth === 'oauth' ? 'Reconnect with YNAB' : 'Sign in with YNAB' }}</a>
+            <button v-if="user.hasPat" class="y-btn-secondary" type="button" :disabled="patBusy" @click="removePat">Disconnect</button>
+          </div>
+          <details class="pat-details">
+            <summary>Use a personal access token instead</summary>
+            <p class="y-tiny">
+              For your own self-hosted copy. Create one under
+              <a href="https://app.ynab.com/settings/developer" target="_blank" rel="noopener">YNAB → Account Settings → Developer</a>
+              — YNAB asks that tokens stay with their owner, so only paste yours into an instance you run.
+            </p>
+            <form class="row" @submit.prevent="savePat">
+              <input
+                v-model="pat"
+                class="y-input grow"
+                type="password"
+                :placeholder="user.ynabAuth === 'pat' ? 'Replace saved token…' : 'Paste your token…'"
+                aria-label="YNAB personal access token"
+                autocomplete="off"
+              >
+              <button class="y-btn" type="submit" :disabled="patBusy || !pat.trim()">Save</button>
+            </form>
+          </details>
+        </template>
+        <template v-else>
+          <p class="y-body">
+            Pulls your budgets live from YNAB. Create a personal access token under
+            <a href="https://app.ynab.com/settings/developer" target="_blank" rel="noopener">YNAB → Account Settings → Developer</a>.
+            It's stored encrypted and only ever used server-side.
+          </p>
+          <form class="row" @submit.prevent="savePat">
+            <input
+              v-model="pat"
+              class="y-input grow"
+              type="password"
+              :placeholder="user.hasPat ? 'Replace saved token…' : 'Paste your token…'"
+              aria-label="YNAB personal access token"
+              autocomplete="off"
+            >
+            <button class="y-btn" type="submit" :disabled="patBusy || !pat.trim()">Save</button>
+            <button v-if="user.hasPat" class="y-btn-secondary" type="button" :disabled="patBusy" @click="removePat">Remove</button>
+          </form>
+        </template>
         <p v-if="patMessage" class="y-tiny note">{{ patMessage }}</p>
         <div v-if="picker.open" class="picker">
           <div class="picker-head">Which budgets should Plannrr import?</div>
@@ -605,6 +677,25 @@ async function signOut () {
           </form>
           <p v-if="uploadMessage" class="y-tiny note">{{ uploadMessage }}</p>
         </div>
+      </section>
+
+      <section id="delete" class="y-card danger-card">
+        <div class="y-card-title">Delete my account</div>
+        <p class="y-body">
+          Removes everything Plannrr holds for you — imported budgets, YNAB access, debts, drafts,
+          story, feedback, and your picture — immediately and for good. Nothing changes in YNAB.
+          See the <NuxtLink to="/privacy">privacy policy</NuxtLink> for what that covers.
+        </p>
+        <button v-if="!deleteOpen" class="y-btn-danger" @click="deleteOpen = true">Delete my account…</button>
+        <template v-else>
+          <label class="y-tiny" for="delete-confirm">Type <b>{{ user.email }}</b> to confirm</label>
+          <div class="row">
+            <input id="delete-confirm" v-model="deleteConfirm" class="y-input grow" type="email" autocomplete="off" :placeholder="user.email">
+            <button class="y-btn-danger" :disabled="!canDelete" @click="deleteAccount">{{ deleteBusy ? 'Deleting…' : 'Delete everything' }}</button>
+            <button class="y-btn-link" :disabled="deleteBusy" @click="deleteOpen = false; deleteConfirm = ''">Cancel</button>
+          </div>
+          <p v-if="deleteError" class="y-error msg">{{ deleteError }}</p>
+        </template>
       </section>
 
       <NuxtLink to="/tinkrr" class="open">→ Open Tinkrr</NuxtLink>
@@ -811,4 +902,10 @@ h1 { font-size: 26px; }
   .profile-body { flex-direction: column; }
   .grid { grid-template-columns: 1fr; }
 }
+.oauth-btn { text-decoration: none; display: inline-flex; align-items: center; }
+.pat-details { margin-top: 12px; }
+.pat-details summary { cursor: pointer; font-size: 12.5px; font-weight: 700; color: var(--fg-subtle); }
+.pat-details summary:hover { color: var(--teal-dark); }
+.pat-details p { margin: 8px 0; }
+.danger-card { border-color: var(--danger-bg); }
 </style>

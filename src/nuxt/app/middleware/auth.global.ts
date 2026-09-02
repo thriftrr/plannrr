@@ -6,7 +6,7 @@
 //     NUXT_YNAB_PERSONAL_ACCESS_TOKEN and running the app yourself
 // Both are how the app is used without an account at all, so the gate checks
 // for them before redirecting.
-const PUBLIC_ROUTES = ['/login', '/auth/verify']
+const PUBLIC_ROUTES = ['/login', '/auth/verify', '/privacy']
 
 export default defineNuxtRouteMiddleware(async (to) => {
   if (PUBLIC_ROUTES.some(path => to.path === path || to.path.startsWith(`${path}/`))) return

@@ -74,6 +74,7 @@ function reset () {
       </div>
       <button class="y-btn-link back" @click="reset">← Use a different email</button>
     </section>
+    <LegalLine />
   </main>
 </template>
 

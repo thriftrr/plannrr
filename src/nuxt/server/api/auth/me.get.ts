@@ -10,7 +10,10 @@ export default defineEventHandler(async (event) => {
     user: {
       email: user.email,
       isAdmin: isAdminEmail(user.email),
-      hasPat: Boolean(user.patCipher),
+      hasPat: Boolean(user.patCipher || user.ynabRefreshCipher),
+      // how YNAB is connected: 'oauth' (Sign in with YNAB), 'pat', or null
+      ynabAuth: user.ynabRefreshCipher ? 'oauth' : user.patCipher ? 'pat' : null,
+      ynabOauthAvailable: oauthConfigured(),
       firstName: user.firstName,
       lastName: user.lastName,
       currency: user.currency ?? 'USD',
