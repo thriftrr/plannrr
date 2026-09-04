@@ -551,10 +551,24 @@ function deleteForever (id: string) {
   removeCustom(id)
 }
 
-// ---- Drag & drop (across groups AND budgets) -------------------------------
+// ---- Drag & drop (reorder, across groups AND budgets) -----------------------
+// Pointer events rather than HTML5 drag-and-drop: the same code serves a
+// mouse, a trackpad, and a finger (native DnD never fires on Android touch
+// and is flaky on iOS). The handle captures the pointer; whatever sits under
+// the pointer decides the drop — a row (above or below its midline), a group
+// header (append to that group), or a plan header (first group of that plan).
 const dragging = ref<string | null>(null)
+const dragLabel = ref('')
+const dragPoint = ref({ x: 0, y: 0 })
 const dropBeforeId = ref<string | null>(null)
+const dropAfterId = ref<string | null>(null)
 const dropGroupKey = ref<string | null>(null)
+
+type DropTarget = { planId: string, groupKey: string, beforeId: string | null }
+let dropTarget: DropTarget | null = null
+let dragPending: { id: string, x: number, y: number, pointerId: number, handle: HTMLElement } | null = null
+let autoScroll = 0
+let autoScrollFrame = 0
 
 function snapshotLayout (): Record<string, string[]> {
   const snapshot: Record<string, string[]> = {}
@@ -585,48 +599,147 @@ function moveCategory (categoryId: string, toPlanId: string, toGroupKey: string,
   }
 }
 
-function onDragStart (category: Category, event: DragEvent) {
-  dragging.value = category.id
-  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+function clearDropMarks () {
+  dropBeforeId.value = null
+  dropAfterId.value = null
+  dropGroupKey.value = null
+  dropTarget = null
 }
+
+function onHandlePointerDown (category: Category, event: PointerEvent) {
+  if (event.button !== 0 && event.pointerType === 'mouse') return
+  const handle = event.currentTarget as HTMLElement
+  dragPending = { id: category.id, x: event.clientX, y: event.clientY, pointerId: event.pointerId, handle }
+  try { handle.setPointerCapture(event.pointerId) } catch { /* older engines — moves still bubble to the handle */ }
+  event.preventDefault()
+}
+
+function onHandlePointerMove (category: Category, event: PointerEvent) {
+  if (dragging.value !== category.id) {
+    // A tap or a jitter is not a drag — wait for real travel.
+    if (!dragPending || dragPending.id !== category.id) return
+    if (Math.hypot(event.clientX - dragPending.x, event.clientY - dragPending.y) < 6) return
+    dragging.value = category.id
+    dragLabel.value = catName(category) || 'New category'
+    window.addEventListener('keydown', onDragKey)
+  }
+  event.preventDefault()
+  dragPoint.value = { x: event.clientX, y: event.clientY }
+  updateDropTarget(event.clientX, event.clientY)
+  updateAutoScroll(event.clientY)
+}
+
+function onHandlePointerUp (category: Category) {
+  if (dragging.value === category.id && dropTarget && dragging.value) {
+    const { planId, groupKey, beforeId } = dropTarget
+    if (beforeId !== category.id) moveCategory(category.id, planId, groupKey, beforeId)
+  }
+  onDragEnd()
+}
+
 function onDragEnd () {
+  if (dragPending) {
+    try { dragPending.handle.releasePointerCapture(dragPending.pointerId) } catch { /* already released */ }
+  }
+  dragPending = null
   dragging.value = null
-  dropBeforeId.value = null
+  dragLabel.value = ''
+  clearDropMarks()
+  autoScroll = 0
+  if (autoScrollFrame) cancelAnimationFrame(autoScrollFrame)
+  autoScrollFrame = 0
+  window.removeEventListener('keydown', onDragKey)
+}
+
+function onDragKey (event: KeyboardEvent) {
+  if (event.key === 'Escape') onDragEnd()
+}
+
+onBeforeUnmount(onDragEnd)
+
+// Where would a drop at (x, y) land? Rows, group headers and plan headers
+// carry data-drop attributes so the answer comes straight from the DOM.
+function updateDropTarget (x: number, y: number) {
+  const hit = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-drop]')
+  if (!hit || !dragging.value) {
+    clearDropMarks()
+    return
+  }
+  const planId = hit.dataset.plan!
+  const kind = hit.dataset.drop
+  const section = sections.value.find(s => s.planId === planId)
+  if (!section) {
+    clearDropMarks()
+    return
+  }
+
+  if (kind === 'plan') {
+    const first = section.groups[0]
+    if (!first) {
+      clearDropMarks()
+      return
+    }
+    dropBeforeId.value = null
+    dropAfterId.value = null
+    dropGroupKey.value = `${planId}::header`
+    dropTarget = { planId, groupKey: first.key, beforeId: null }
+    return
+  }
+
+  const groupKey = hit.dataset.group!
+  const group = section.groups.find(g => g.key === groupKey)
+  if (!group) {
+    clearDropMarks()
+    return
+  }
+
+  if (kind === 'group') {
+    dropBeforeId.value = null
+    dropAfterId.value = null
+    dropGroupKey.value = `${planId}::${groupKey}`
+    dropTarget = { planId, groupKey, beforeId: null }
+    return
+  }
+
+  // A row: above its midline means "before it", below means "after it".
+  const rowId = hit.dataset.cat!
+  if (rowId === dragging.value) {
+    clearDropMarks()
+    return
+  }
+  const rect = hit.getBoundingClientRect()
+  const above = y < rect.top + rect.height / 2
+  const visible = group.categories.filter(c => rowVisible(c) && c.id !== dragging.value)
+  const index = visible.findIndex(c => c.id === rowId)
   dropGroupKey.value = null
+  if (above) {
+    dropBeforeId.value = rowId
+    dropAfterId.value = null
+    dropTarget = { planId, groupKey, beforeId: rowId }
+  } else {
+    const next = visible[index + 1]
+    dropBeforeId.value = null
+    dropAfterId.value = rowId
+    dropTarget = { planId, groupKey, beforeId: next?.id ?? null }
+  }
 }
-function onRowDragOver (category: Category, event: DragEvent) {
-  if (!dragging.value || dragging.value === category.id) return
-  event.preventDefault()
-  dropBeforeId.value = category.id
-  dropGroupKey.value = null
+
+// Long lists: holding the pointer near the top or bottom edge scrolls.
+function updateAutoScroll (y: number) {
+  const zone = 72
+  const height = window.innerHeight
+  if (y < zone) autoScroll = -Math.ceil((zone - y) / 6)
+  else if (y > height - zone) autoScroll = Math.ceil((y - (height - zone)) / 6)
+  else autoScroll = 0
+  if (autoScroll && !autoScrollFrame) autoScrollFrame = requestAnimationFrame(scrollTick)
 }
-function onRowDrop (section: PlanSection, group: DisplayGroup, category: Category) {
-  if (!dragging.value || dragging.value === category.id) return
-  moveCategory(dragging.value, section.planId, group.key, category.id)
-  onDragEnd()
-}
-function onGroupDragOver (section: PlanSection, group: DisplayGroup, event: DragEvent) {
-  if (!dragging.value) return
-  event.preventDefault()
-  dropBeforeId.value = null
-  dropGroupKey.value = `${section.planId}::${group.key}`
-}
-function onGroupDrop (section: PlanSection, group: DisplayGroup) {
-  if (!dragging.value) return
-  moveCategory(dragging.value, section.planId, group.key, null)
-  onDragEnd()
-}
-function onPlanHeaderDragOver (section: PlanSection, event: DragEvent) {
-  if (!dragging.value || !section.groups.length) return
-  event.preventDefault()
-  dropBeforeId.value = null
-  dropGroupKey.value = `${section.planId}::header`
-}
-function onPlanHeaderDrop (section: PlanSection) {
-  const first = section.groups[0]
-  if (!dragging.value || !first) return
-  moveCategory(dragging.value, section.planId, first.key, null)
-  onDragEnd()
+
+function scrollTick () {
+  autoScrollFrame = 0
+  if (!dragging.value || !autoScroll) return
+  window.scrollBy(0, autoScroll)
+  updateDropTarget(dragPoint.value.x, dragPoint.value.y)
+  autoScrollFrame = requestAnimationFrame(scrollTick)
 }
 
 // ---- Amount editing -------------------------------------------------------
@@ -1761,7 +1874,13 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
 </script>
 
 <template>
-  <div class="wrap">
+  <div class="wrap" :class="{ dragging }">
+    <div
+      v-if="dragging"
+      class="drag-ghost"
+      :style="{ left: `${dragPoint.x}px`, top: `${dragPoint.y}px` }"
+      aria-hidden="true"
+    >{{ dragLabel }}</div>
     <main class="page">
       <header class="top">
         <MonthStepper v-if="monthOptions.length" v-model="month" :options="monthOptions" />
@@ -1798,7 +1917,8 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
           for it per month. Type a <b>New goal</b> (or a new Income) to see what your plan
           costs against what you expect to earn — the <b>Difference</b> column keeps score.
           Untick rows to leave them out, trash rows to drop them from the plan, drag the
-          ⠿ handle to move a category into another group — or another plan. Fields do math
+          ⠿ handle to reorder categories or move one into another group — or another plan.
+          Fields do math
           like YNAB's: <code>1200/12</code>, <code>+200</code>. <b>Nothing is written to
           YNAB</b> until you sync — drafts live in this browser only.
         </div>
@@ -1868,9 +1988,9 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
               v-if="multiPlan && sectionHasMatch(section)"
               class="grid plan-row"
               :class="{ 'drop-into': dropGroupKey === `${section.planId}::header` }"
+              data-drop="plan"
+              :data-plan="section.planId"
               @click="togglePlanOpen(section)"
-              @dragover="onPlanHeaderDragOver(section, $event)"
-              @drop="onPlanHeaderDrop(section)"
             >
               <div class="cell-name">
                 <span class="chev" :class="{ open: planOpen(section) }">▸</span>
@@ -1892,9 +2012,10 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
                   v-if="groupHasMatch(group) || (!forceOpen && group.custom)"
                   class="grid group-row"
                   :class="{ 'drop-into': dropGroupKey === `${section.planId}::${group.key}` }"
+                  data-drop="group"
+                  :data-plan="section.planId"
+                  :data-group="group.key"
                   @click="toggleGroupOpen(section, group)"
-                  @dragover="onGroupDragOver(section, group, $event)"
-                  @drop="onGroupDrop(section, group)"
                 >
                   <div class="cell-name">
                     <input
@@ -1935,18 +2056,22 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
                       edited: isEdited(category),
                       off: isOff(category),
                       'drop-before': dropBeforeId === category.id,
+                      'drop-after': dropAfterId === category.id,
                       lifting: dragging === category.id
                     }"
-                    @dragover="onRowDragOver(category, $event)"
-                    @drop="onRowDrop(section, group, category)"
+                    data-drop="row"
+                    :data-plan="section.planId"
+                    :data-group="group.key"
+                    :data-cat="category.id"
                   >
                     <div class="cell-name">
                       <span
                         class="drag"
-                        draggable="true"
-                        title="Drag to another group or plan"
-                        @dragstart="onDragStart(category, $event)"
-                        @dragend="onDragEnd"
+                        title="Drag to reorder, or into another group or plan"
+                        @pointerdown="onHandlePointerDown(category, $event)"
+                        @pointermove="onHandlePointerMove(category, $event)"
+                        @pointerup="onHandlePointerUp(category)"
+                        @pointercancel="onDragEnd"
                       >⠿</span>
                       <input
                         type="checkbox"
@@ -2635,6 +2760,7 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
 .row.edited { background: #f3faf8; }
 .row.off { opacity: 0.45; background: #fcfaf5; }
 .row.drop-before { box-shadow: inset 0 2.5px 0 var(--teal); }
+.row.drop-after { box-shadow: inset 0 -2.5px 0 var(--teal); }
 .row.lifting { opacity: 0.35; }
 
 .drag {
@@ -2643,6 +2769,30 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
   font-size: 13px;
   flex: none;
   user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  padding: 2px 4px;
+  margin-left: -4px;
+  border-radius: 6px;
+}
+.drag:hover { color: #8a8373; background: rgba(0, 0, 0, 0.04); }
+.dragging, .dragging * { cursor: grabbing !important; }
+.drag-ghost {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  transform: translate(12px, -50%);
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--teal);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  max-width: 260px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .name-text {
   font-size: 14px;
@@ -3298,7 +3448,7 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
   .goal-cell { flex-direction: row; flex-wrap: wrap; gap: 0 6px; font-size: 12px; }
   .goal-raw { white-space: normal; overflow: visible; }
   .cell-name .check { width: 22px; height: 22px; }
-  .drag { width: 24px; }
+  .drag { width: 30px; min-height: 30px; display: inline-flex; align-items: center; justify-content: center; margin-left: -6px; }
   .amount { width: 96px; min-height: 40px; font-size: 16px; }
   .shape-btn, .mini-act { width: 36px; height: 36px; }
   .mini-act { font-size: 16px; }

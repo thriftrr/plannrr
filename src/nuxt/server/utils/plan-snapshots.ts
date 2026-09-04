@@ -1,4 +1,4 @@
-import type { BudgetAccount, BudgetTransaction, Category, CurrencyFormat, MonthDetail, MonthSummary, ScheduledTransaction } from '#shared/types/ynab'
+import type { BudgetAccount, BudgetTransaction, Category, CategoryGroupWithCategories, CurrencyFormat, MonthDetail, MonthSummary, ScheduledTransaction } from '#shared/types/ynab'
 
 // ============================================================================
 // Local-first plan snapshots.
@@ -53,7 +53,7 @@ export async function deleteSnapshot (owner: string, sourceId: string): Promise<
 // window tight enough to stay friendly with the 200-requests/hour budget.
 const SNAPSHOT_MONTHS = 14
 
-// Pulls one budget out of YNAB into snapshot form. Costs ~2 + min(months, 14)
+// Pulls one budget out of YNAB into snapshot form. Costs ~3 + min(months, 14)
 // API calls; callers hold the sync throttle.
 export async function snapshotYnabPlan (
   pat: string,
@@ -65,11 +65,26 @@ export async function snapshotYnabPlan (
     .sort((a, b) => b.month.localeCompare(a.month))
   const keep = live.slice(0, SNAPSHOT_MONTHS)
 
+  // The order a person sees in YNAB lives on the categories endpoint (groups
+  // in sort order, each holding its categories in sort order); month details
+  // don't promise any order. One extra call buys every month the same order.
+  const rank = new Map<string, number>()
+  try {
+    const res = await ynabApi<{ category_groups: CategoryGroupWithCategories[] }>(pat, `/plans/${plan.id}/categories`)
+    for (const group of res.category_groups) {
+      for (const category of group.categories) rank.set(category.id, rank.size)
+    }
+  } catch { /* fall back to whatever order the month endpoint gives */ }
+  const inYnabOrder = (categories: Category[]) => categories
+    .map((category, index) => ({ category, index, rank: rank.get(category.id) ?? Number.MAX_SAFE_INTEGER }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map(item => item.category)
+
   const details: Record<string, MonthDetail> = {}
   for (const month of keep) {
     // Serial on purpose: a burst of parallel calls trips YNAB's rate limiter.
     const res = await ynabApi<{ month: MonthDetail }>(pat, `/plans/${plan.id}/months/${month.month}`)
-    details[month.month] = res.month
+    details[month.month] = { ...res.month, categories: inYnabOrder(res.month.categories) }
   }
 
   let scheduled: ScheduledTransaction[] = []
