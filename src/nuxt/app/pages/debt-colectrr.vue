@@ -1817,7 +1817,7 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
           <div class="edit-grid">
             <label>
               Label
-              <input v-model="lumpEdit.label" placeholder="Quarterly bonus" aria-label="Label" maxlength="60">
+              <input v-model="lumpEdit.label" placeholder="Annual bonus" aria-label="Label" maxlength="60">
             </label>
             <label>
               Amount $
