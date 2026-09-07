@@ -40,6 +40,7 @@ interface DebtSettings {
   snowball: number
   extra: number
   customOrder: string[]
+  lumps: LumpPayment[]
 }
 
 const STRATEGY_META: Record<StrategyKey, { label: string, blurb: string }> = {
@@ -59,7 +60,7 @@ const loading = ref(true)
 // phones the panel is a sheet over a scrolling page, so this matters.
 // Registered after mount: the refs it reads are declared further down.
 onMounted(() => {
-  watch(() => Boolean(editing.value || refi.value || orderModalOpen.value), (open) => {
+  watch(() => Boolean(editing.value || refi.value || orderModalOpen.value || lumpEdit.value), (open) => {
     document.body.style.overflow = open ? 'hidden' : ''
   })
 })
@@ -74,7 +75,7 @@ const paidShare = (loan: LoanRow) => {
 }
 const lastSynced = ref<string | null>(null)
 const extras = ref<Record<string, number>>({})
-const settings = ref<DebtSettings>({ strategy: 'minimum', snowball: 0, extra: 0, customOrder: [] })
+const settings = ref<DebtSettings>({ strategy: 'minimum', snowball: 0, extra: 0, customOrder: [], lumps: [] })
 
 const syncPlans = ref<Array<{ id: string, name: string, kind: 'live' | 'import' }>>([])
 const selectedPlanIds = ref<string[]>([])
@@ -141,7 +142,7 @@ async function loadDebts () {
     isMock.value = data.mock
     debts.value = data.debts
     lastSynced.value = data.lastSynced
-    if (data.settings) settings.value = data.settings
+    if (data.settings) settings.value = { lumps: [], ...data.settings }
   } catch { /* empty state */ }
 }
 
@@ -506,30 +507,34 @@ interface JourneyLoan {
   extraFirstMonth?: number
 }
 
+// Projections start the month after the latest synced balance.
+const journeyStart = computed(() => todayMonth.value ? nextDebtMonth(todayMonth.value) : '')
+
+// Every scheduled lump payment unrolled into concrete future hits.
+const journeyHits = computed(() => expandLumpPayments(settings.value.lumps, journeyStart.value))
+
+type JourneyResult = { map: Map<string, PayoffProjection>, debtFree: string | null, interest: number }
+
 // One engine for every "how does the whole journey look" question — the
-// strategy cards and the refinance comparison both run through here.
-function runJourney (key: StrategyKey, loanSet: JourneyLoan[], customIds?: string[]): { map: Map<string, PayoffProjection>, debtFree: string | null, interest: number } {
-  const start = todayMonth.value ? nextDebtMonth(todayMonth.value) : ''
+// strategy cards, the refinance comparison and the lump-sum what-ifs all
+// run through here.
+function runJourney (key: StrategyKey, loanSet: JourneyLoan[], customIds?: string[], hits: LumpHit[] = journeyHits.value): JourneyResult {
+  const start = journeyStart.value
   const map = new Map<string, PayoffProjection>()
   if (!start || !loanSet.length) return { map, debtFree: null, interest: 0 }
 
   if (key === 'minimum') {
-    let latest: string | null = ''
-    let interest = 0
-    for (const loan of loanSet) {
-      const projection = projectPayoff({
-        balance: loan.balance,
-        annualRatePct: loan.annualRatePct,
-        payment: loan.minimum,
-        fromMonth: start,
-        extra: loan.extraFirstMonth ? { month: start, amount: loan.extraFirstMonth } : undefined
-      })
-      map.set(loan.id, projection)
-      interest += projection.interestTotal
-      if (!projection.payoffMonth) latest = null
-      else if (latest !== null && projection.payoffMonth > latest) latest = projection.payoffMonth
-    }
-    return { map, debtFree: latest || null, interest }
+    // No rollover, no pool — only lump sums cascade, highest APR first.
+    const result = projectSnowball({
+      loans: [...loanSet].sort((a, b) => (b.annualRatePct - a.annualRatePct) || (a.balance - b.balance)),
+      pool: 0,
+      order: 'given',
+      fromMonth: start,
+      lumps: hits,
+      rollover: false
+    })
+    for (const [id, projection] of Object.entries(result.perLoan)) map.set(id, projection)
+    return { map, debtFree: result.debtFree, interest: result.interestTotal }
   }
 
   let ordered = loanSet
@@ -546,7 +551,8 @@ function runJourney (key: StrategyKey, loanSet: JourneyLoan[], customIds?: strin
     loans: ordered,
     pool: snowballPool.value,
     order: 'given',
-    fromMonth: start
+    fromMonth: start,
+    lumps: hits
   })
   for (const [id, projection] of Object.entries(result.perLoan)) map.set(id, projection)
   return { map, debtFree: result.debtFree, interest: result.interestTotal }
@@ -560,8 +566,8 @@ const toJourneyLoan = (loan: LoanRow): JourneyLoan => ({
   extraFirstMonth: extras.value[loan.id]
 })
 
-function strategyResult (key: StrategyKey): { map: Map<string, PayoffProjection>, debtFree: string | null, interest: number } {
-  return runJourney(key, activeLoans.value.map(toJourneyLoan), customOrderIds.value)
+function strategyResult (key: StrategyKey, hits?: LumpHit[]): JourneyResult {
+  return runJourney(key, activeLoans.value.map(toJourneyLoan), customOrderIds.value, hits)
 }
 
 const strategyCards = computed(() =>
@@ -576,6 +582,139 @@ const selectedResult = computed(() => strategyResult(settings.value.strategy))
 const projections = computed(() => selectedResult.value.map)
 const debtFreeMonth = computed(() => selectedResult.value.debtFree)
 const totalInterest = computed(() => selectedResult.value.interest)
+
+// ---- One-time payments ----------------------------------------------------
+// Bonuses, refunds, gifts: dated lump sums (optionally repeating) that the
+// forecast folds in on top of the monthly plan. Saved with the settings.
+
+const lumpEdit = ref<null | {
+  id: string | null
+  label: string
+  amount: string
+  month: string
+  repeat: 'once' | 'every'
+  every: string
+  times: string
+  loanId: string
+}>(null)
+
+function openLump (id: string | null) {
+  const existing = id ? settings.value.lumps.find(lump => lump.id === id) : null
+  const defaultMonth = journeyStart.value || `${new Date().toISOString().slice(0, 7)}-01`
+  lumpEdit.value = existing
+    ? {
+        id: existing.id,
+        label: existing.label,
+        amount: (existing.amount / 1000).toFixed(2),
+        month: existing.month.slice(0, 7),
+        repeat: existing.every > 0 ? 'every' : 'once',
+        every: existing.every > 0 ? String(existing.every) : '3',
+        times: existing.times > 0 ? String(existing.times) : '',
+        loanId: existing.loanId ?? ''
+      }
+    : { id: null, label: '', amount: '', month: defaultMonth.slice(0, 7), repeat: 'once', every: '3', times: '', loanId: '' }
+}
+
+// The editor's current values as a lump — null until the form makes sense.
+const lumpDraft = computed<LumpPayment | null>(() => {
+  const edit = lumpEdit.value
+  if (!edit) return null
+  const amount = Number.parseFloat(edit.amount.replace(/[$,]/g, ''))
+  if (!Number.isFinite(amount) || amount <= 0 || !/^\d{4}-\d{2}$/.test(edit.month)) return null
+  const every = edit.repeat === 'every' ? Math.floor(Number(edit.every)) : 0
+  const times = edit.repeat === 'every' ? Math.floor(Number(edit.times)) : 0
+  return {
+    id: edit.id ?? `lump-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    label: edit.label.trim().slice(0, 60),
+    amount: Math.round(amount * 1000),
+    month: `${edit.month}-01`,
+    every: Number.isFinite(every) && every > 0 ? Math.min(every, 120) : 0,
+    times: Number.isFinite(times) && times > 0 ? Math.min(times, 600) : 0,
+    loanId: edit.loanId && activeLoans.value.some(loan => loan.id === edit.loanId) ? edit.loanId : null
+  }
+})
+
+// The hits that actually land before the journey ends — an open-ended
+// bonus is unrolled to the horizon, but only the ones before debt-free
+// (or before the projection gave up) count.
+function landedHits (hits: LumpHit[], result: JourneyResult): LumpHit[] {
+  let end = result.debtFree ?? ''
+  if (!end) {
+    for (const projection of result.map.values()) {
+      const last = projection.months[projection.months.length - 1] ?? ''
+      if (last > end) end = last
+    }
+  }
+  return hits.filter(hit => hit.month <= end)
+}
+
+// Live preview inside the editor: the journey with this draft in place
+// versus the same journey without it.
+const lumpDraftEffect = computed(() => {
+  const draft = lumpDraft.value
+  if (!draft || !activeLoans.value.length) return null
+  const others = settings.value.lumps.filter(lump => lump.id !== draft.id)
+  const without = strategyResult(settings.value.strategy, expandLumpPayments(others, journeyStart.value))
+  const withDraft = strategyResult(settings.value.strategy, expandLumpPayments([...others, draft], journeyStart.value))
+  const landed = landedHits(expandLumpPayments([draft], journeyStart.value), withDraft)
+  return {
+    hits: landed.length,
+    total: landed.reduce((sum, hit) => sum + hit.amount, 0),
+    without,
+    withDraft,
+    monthsSooner: without.debtFree && withDraft.debtFree ? monthDiff(withDraft.debtFree, without.debtFree) : null,
+    interestSaved: without.debtFree && withDraft.debtFree ? without.interest - withDraft.interest : null
+  }
+})
+
+function saveLump () {
+  const draft = lumpDraft.value
+  if (!draft) return
+  const lumps = settings.value.lumps.filter(lump => lump.id !== draft.id)
+  lumps.push(draft)
+  lumps.sort((a, b) => a.month.localeCompare(b.month))
+  saveSettings({ lumps })
+  lumpEdit.value = null
+}
+
+function deleteLump () {
+  const id = lumpEdit.value?.id
+  if (id) saveSettings({ lumps: settings.value.lumps.filter(lump => lump.id !== id) })
+  lumpEdit.value = null
+}
+
+const loanNameById = computed(() => new Map(loans.value.map(loan => [loan.id, loan.name])))
+
+// Chips under the strategy bar, one per scheduled lump.
+const lumpChips = computed(() => settings.value.lumps.map((lump) => {
+  const upcoming = expandLumpPayments([lump], journeyStart.value)
+  const parts = [fmt(lump.amount)]
+  if (lump.every > 0) parts.push(`every ${lump.every} mo from ${shortMonth(lump.month)}${lump.times ? ` ×${lump.times}` : ''}`)
+  else parts.push(shortMonth(lump.month))
+  if (lump.loanId) parts.push(`→ ${loanNameById.value.get(lump.loanId) ?? 'a loan that\'s gone'}`)
+  return {
+    id: lump.id,
+    label: lump.label || (lump.every > 0 ? 'Recurring' : 'One-time'),
+    detail: parts.join(' · '),
+    past: upcoming.length === 0
+  }
+}))
+
+// What every scheduled lump does to the chosen plan, together.
+const lumpEffect = computed(() => {
+  if (!journeyHits.value.length || !activeLoans.value.length) return null
+  const without = strategyResult(settings.value.strategy, [])
+  const withLumps = selectedResult.value
+  const landed = landedHits(journeyHits.value, withLumps)
+  return {
+    hits: landed.length,
+    total: landed.reduce((sum, hit) => sum + hit.amount, 0),
+    without,
+    withLumps,
+    monthsSooner: without.debtFree && withLumps.debtFree ? monthDiff(withLumps.debtFree, without.debtFree) : null,
+    interestSaved: without.debtFree && withLumps.debtFree ? without.interest - withLumps.interest : null
+  }
+})
 
 // ---- Order flyout ---------------------------------------------------------
 
@@ -727,7 +866,10 @@ const refiModel = computed(() => {
     ...customOrderIds.value.filter(id => !model.bundleIds.includes(id)),
     '__refi__'
   ]
-  const newJourney = runJourney(key, [...remaining, newLoan], customIds)
+  const hits = journeyHits.value.map(hit =>
+    hit.loanId && model.bundleIds.includes(hit.loanId) ? { ...hit, loanId: '__refi__' } : hit
+  )
+  const newJourney = runJourney(key, [...remaining, newLoan], customIds, hits)
 
   const minsCurrent = totalMinimums.value
   const minsNew = minsCurrent - bundleMinimums + newPayment
@@ -893,6 +1035,8 @@ interface ChartModel {
   yTicks: Array<{ y: number, label: string }>
   xTicks: Array<{ x: number, label: string }>
   totals: number[]
+  lumpMarks: Array<{ x: number, y: number, month: string, amount: number }>
+  lumpByMonth: Map<string, number>
 }
 
 function monthDiff (a: string, b: string): number {
@@ -941,7 +1085,11 @@ const chart = computed<ChartModel | null>(() => {
         return started ? Math.max(-carried, 0) : 0
       }
       if (projByMonth.has(month)) return Math.max(projByMonth.get(month)!, 0)
-      if (projection && !projection.payoffMonth && projection.months.length === 0) return Math.max(-loan.balance, 0)
+      // A loan that never amortizes stops where the projection gave up —
+      // hold it there rather than letting the band drop to zero.
+      if (projection && !projection.payoffMonth) {
+        return Math.max(projection.balances[projection.balances.length - 1] ?? -loan.balance, 0)
+      }
       return 0
     })
   })
@@ -990,6 +1138,14 @@ const chart = computed<ChartModel | null>(() => {
     trackPoints.push(`${x(i).toFixed(1)},${y(totals[i]!).toFixed(1)}`)
   }
 
+  const lumpByMonth = new Map<string, number>()
+  for (const hit of journeyHits.value) lumpByMonth.set(hit.month, (lumpByMonth.get(hit.month) ?? 0) + hit.amount)
+  const lumpMarks: ChartModel['lumpMarks'] = []
+  for (const [month, amount] of lumpByMonth) {
+    const index = months.indexOf(month)
+    if (index > todayIdx && totals[index]! > 0) lumpMarks.push({ x: x(index), y: y(totals[index]!), month, amount })
+  }
+
   const yTicks = [0.25, 0.5, 0.75, 1].map(f => ({ y: y(yMax * f), label: fmtShort(yMax * f) }))
   const step = Math.max(1, Math.round(months.length / 8))
   const xTicks: ChartModel['xTicks'] = []
@@ -1006,7 +1162,9 @@ const chart = computed<ChartModel | null>(() => {
     todayPoint: todayIdx >= 0 ? { x: x(todayIdx), y: y(totals[todayIdx]!) } : null,
     yTicks,
     xTicks,
-    totals
+    totals,
+    lumpMarks,
+    lumpByMonth
   }
 })
 
@@ -1079,6 +1237,15 @@ const shortMonth = (key: string) => {
 }
 const dateLabel = (iso: string) =>
   new Date(`${iso.slice(0, 10)}T00:00:00`).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+
+const monthsSooner = (months: number) => {
+  if (!months) return 'the same month'
+  const abs = Math.abs(months)
+  const years = Math.floor(abs / 12)
+  const rem = abs % 12
+  const span = years && rem ? `${years} yr, ${rem} mo` : years ? `${years} yr` : `${rem} mo`
+  return `${span} ${months > 0 ? 'sooner' : 'later'}`
+}
 
 const timeUntil = (payoff: string) => {
   const total = monthDiff(todayMonth.value, payoff)
@@ -1247,6 +1414,32 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
         </span>
       </section>
 
+      <section class="lumps-bar" aria-label="One-time payments">
+        <span class="lumps-label" title="Bonuses, refunds, gifts — dated lump sums the forecast folds in on top of the monthly plan">One-time payments</span>
+        <button
+          v-for="chip in lumpChips"
+          :key="chip.id"
+          class="lump-chip"
+          :class="{ past: chip.past }"
+          :title="chip.past ? 'Already behind us — no future hits' : 'Edit'"
+          @click="openLump(chip.id)"
+        >
+          <strong>{{ chip.label }}</strong> <span>{{ chip.detail }}</span>
+        </button>
+        <button class="ghost-btn" :disabled="!activeLoans.length" @click="openLump(null)">+ Add a bonus or lump sum</button>
+        <span v-if="lumpEffect" class="lumps-effect">
+          <template v-if="lumpEffect.monthsSooner !== null">
+            {{ fmt(lumpEffect.total) }} across {{ lumpEffect.hits }} {{ lumpEffect.hits === 1 ? 'payment' : 'payments' }}
+            → debt-free <strong>{{ monthsSooner(lumpEffect.monthsSooner) }}</strong>
+            <template v-if="lumpEffect.interestSaved"> · {{ fmt(Math.abs(lumpEffect.interestSaved)) }} {{ lumpEffect.interestSaved > 0 ? 'less' : 'more' }} interest</template>
+          </template>
+          <template v-else-if="lumpEffect.withLumps.debtFree">
+            {{ fmt(lumpEffect.total) }} across {{ lumpEffect.hits }} {{ lumpEffect.hits === 1 ? 'payment' : 'payments' }}
+            is what gets this plan to debt-free at all — <strong>{{ dateLabel(lumpEffect.withLumps.debtFree) }}</strong>.
+          </template>
+        </span>
+      </section>
+
       <section v-if="chart" class="chart-card">
         <svg
           :viewBox="`0 0 ${CHART.width} ${CHART.height}`"
@@ -1266,6 +1459,11 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
           </g>
 
           <path v-if="chart.trackLine" :d="chart.trackLine" class="track" />
+          <g v-for="mark in chart.lumpMarks" :key="`l${mark.month}`" class="lump-mark">
+            <title>{{ shortMonth(mark.month) }}: {{ fmt(mark.amount) }} one-time</title>
+            <line :x1="mark.x" :x2="mark.x" :y1="mark.y - 4" :y2="mark.y - 16" />
+            <path :d="`M${mark.x - 5},${mark.y - 22}L${mark.x + 5},${mark.y - 22}L${mark.x},${mark.y - 15}Z`" />
+          </g>
           <line v-if="chart.todayPoint" :x1="chart.todayPoint.x" :x2="chart.todayPoint.x" :y1="CHART.top" :y2="CHART.height - CHART.bottom" class="today-line" />
           <circle v-if="chart.todayPoint" :cx="chart.todayPoint.x" :cy="chart.todayPoint.y" r="5" class="today-dot" />
           <line v-if="hover" :x1="hover.x" :x2="hover.x" :y1="CHART.top" :y2="CHART.height - CHART.bottom" class="crosshair" />
@@ -1286,6 +1484,10 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
             <span class="tip-name">Total</span>
             <span class="tip-value">{{ fmt(hover.total) }}</span>
           </p>
+          <p v-if="chart!.lumpByMonth.has(hover.month)" class="tip-row tip-lump">
+            <span class="tip-name">One-time payment</span>
+            <span class="tip-value">+{{ fmt(chart!.lumpByMonth.get(hover.month)!) }}</span>
+          </p>
         </div>
 
         <div class="legend">
@@ -1295,6 +1497,7 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
           </span>
           <span class="legend-item muted"><span class="chip solid" /> actual</span>
           <span class="legend-item muted"><span class="chip dashed" /> projected</span>
+          <span v-if="chart.lumpMarks.length" class="legend-item muted"><span class="chip lump" /> one-time payment</span>
         </div>
 
         <p v-if="debtFreeMonth && pooled" class="payoff-strip">
@@ -1438,7 +1641,8 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
       Synced rows refresh from YNAB when you hit Sync — your APR, Monthly, and
       start-date fixes survive. Manual rows chart a straight paydown between
       their two known points. "Extra next month" lives in each row's ✎ panel
-      and is a one-time what-if that stays in this browser.
+      and is a one-time what-if that stays in this browser; one-time payments
+      above are saved with your strategy and shape every forecast on this page.
     </p>
 
     <PageFooter />
@@ -1593,6 +1797,88 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
         <footer class="flyout-foot">
           <span class="muted">A what-if only — nothing is saved.</span>
           <button class="primary" @click="refi = null">Done</button>
+        </footer>
+      </aside>
+    </div>
+
+    <!-- One-time payment editor flyout -->
+    <div v-if="lumpEdit" class="flyout-backdrop" @click.self="lumpEdit = null">
+      <aside class="flyout" role="dialog" aria-modal="true" aria-label="One-time payment">
+        <header class="flyout-head">
+          <h2>{{ lumpEdit.id ? 'Edit one-time payment' : 'One-time payment' }}</h2>
+          <button class="reset" aria-label="Close" @click="lumpEdit = null">✕</button>
+        </header>
+        <p class="muted">
+          A bonus, a refund, a gift — money that lands once (or every so often)
+          and goes straight at the debt, on top of the monthly plan.
+        </p>
+
+        <div class="edit-fields">
+          <div class="edit-grid">
+            <label>
+              Label
+              <input v-model="lumpEdit.label" placeholder="Quarterly bonus" aria-label="Label" maxlength="60">
+            </label>
+            <label>
+              Amount $
+              <input v-model="lumpEdit.amount" inputmode="decimal" placeholder="0" aria-label="Amount">
+            </label>
+            <label>
+              {{ lumpEdit.repeat === 'every' ? 'First payment' : 'Month' }}
+              <input v-model="lumpEdit.month" type="month" aria-label="Month">
+            </label>
+            <label>
+              Repeats
+              <select v-model="lumpEdit.repeat" aria-label="Repeats">
+                <option value="once">Just once</option>
+                <option value="every">Every few months</option>
+              </select>
+            </label>
+            <template v-if="lumpEdit.repeat === 'every'">
+              <label>
+                Every … months
+                <input v-model="lumpEdit.every" inputmode="numeric" placeholder="3" aria-label="Months between payments">
+              </label>
+              <label>
+                How many times
+                <input v-model="lumpEdit.times" inputmode="numeric" placeholder="until debt-free" aria-label="Number of payments">
+              </label>
+            </template>
+            <label class="edit-span">
+              Goes to
+              <select v-model="lumpEdit.loanId" aria-label="Which loan">
+                <option value="">Follow the strategy — {{ settings.strategy === 'minimum' ? 'highest APR first' : 'next loan in line' }}</option>
+                <option v-for="loan in activeLoans" :key="loan.id" :value="loan.id">{{ loan.name }} · {{ fmt(-loan.balance) }}</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <p v-if="lumpDraftEffect" class="recon-line" :class="lumpDraftEffect.monthsSooner || lumpDraftEffect.withDraft.debtFree ? 'ok' : 'info'">
+          <template v-if="!lumpDraftEffect.hits">
+            That month is already behind us — nothing left to forecast.
+          </template>
+          <template v-else-if="lumpDraftEffect.monthsSooner !== null">
+            {{ fmt(lumpDraftEffect.total) }} across {{ lumpDraftEffect.hits }} {{ lumpDraftEffect.hits === 1 ? 'payment' : 'payments' }}
+            moves debt-free from {{ dateLabel(lumpDraftEffect.without.debtFree!) }}
+            to <strong>{{ dateLabel(lumpDraftEffect.withDraft.debtFree!) }}</strong>
+            — {{ monthsSooner(lumpDraftEffect.monthsSooner) }}<template v-if="lumpDraftEffect.interestSaved">,
+              {{ fmt(Math.abs(lumpDraftEffect.interestSaved)) }} {{ lumpDraftEffect.interestSaved > 0 ? 'less' : 'more' }} interest</template>.
+          </template>
+          <template v-else-if="lumpDraftEffect.withDraft.debtFree">
+            This is what gets the plan to debt-free at all —
+            <strong>{{ dateLabel(lumpDraftEffect.withDraft.debtFree) }}</strong>, {{ fmt(lumpDraftEffect.withDraft.interest) }} interest.
+          </template>
+          <template v-else>
+            Even with this, some loans never amortize at their current payments.
+          </template>
+        </p>
+        <p v-else-if="lumpEdit.amount" class="muted">Enter an amount and a month to see the effect.</p>
+
+        <footer class="flyout-foot">
+          <button v-if="lumpEdit.id" class="ghost-btn danger" @click="deleteLump">Remove</button>
+          <span v-else class="muted">Saved with your strategy settings.</span>
+          <button class="primary" :disabled="!lumpDraft" @click="saveLump">{{ lumpEdit.id ? 'Save' : 'Add' }}</button>
         </footer>
       </aside>
     </div>
@@ -1915,6 +2201,66 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
   font-variant-numeric: tabular-nums;
 }
 .pool-field input:focus { border-color: var(--teal); outline: none; }
+
+/* ---- One-time payments row ---- */
+.lumps-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  align-items: center;
+  margin: 10px 0 0;
+}
+
+.lumps-label { font-size: 12.5px; font-weight: 700; color: var(--fg-muted); }
+
+.lump-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 11px;
+  border: 1.5px solid var(--teal);
+  border-radius: var(--r-pill);
+  background: var(--teal-bg);
+  color: var(--teal-dark);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 100%;
+}
+.lump-chip strong { font-weight: 800; white-space: nowrap; }
+.lump-chip span { color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.lump-chip:hover { background: var(--teal-badge); }
+.lump-chip.past { border-style: dashed; border-color: var(--border-input); background: var(--bg-card); color: var(--fg-subtle); }
+.lump-chip.past span { color: var(--fg-subtle); }
+
+.lumps-effect { font-size: 12.5px; color: var(--fg-muted); }
+.lumps-effect strong { color: var(--teal-dark); }
+
+.lump-mark line { stroke: var(--teal-dark); stroke-width: 1.5; }
+.lump-mark path { fill: var(--teal-dark); }
+
+.chip.lump { background: var(--teal-dark); border-radius: 2px; clip-path: polygon(0 0, 100% 0, 50% 100%); }
+
+.tip-lump { color: var(--teal-dark); font-weight: 700; }
+
+.ghost-btn.danger:hover { border-color: var(--danger); color: var(--danger-dark); }
+.ghost-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.edit-fields select {
+  padding: 7px 10px;
+  border: 1.5px solid var(--border-input);
+  border-radius: var(--r-xs);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  background: var(--bg-input);
+  color: inherit;
+  text-transform: none;
+  letter-spacing: normal;
+  max-width: 100%;
+}
+.edit-fields select:focus { border-color: var(--teal); outline: none; }
+.edit-span { grid-column: 1 / -1; }
 
 /* ---- Chart card ---- */
 .chart-card {

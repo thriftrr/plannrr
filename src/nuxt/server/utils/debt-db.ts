@@ -277,20 +277,64 @@ export async function deleteDebt (userId: string, id: string): Promise<boolean> 
   return rows.length > 0
 }
 
-// Payoff-strategy settings (strategy, snowball pool, extra, custom order)
-// persist per owner in KV — small, single-row shaped, no migration needed.
+// Payoff-strategy settings (strategy, snowball pool, extra, custom order,
+// one-time lump payments) persist per owner in KV — small, single-row
+// shaped, no migration needed.
 export type DebtStrategy = 'minimum' | 'snowball' | 'avalanche' | 'custom'
+
+// A dated lump sum (bonus, refund) folded into the payoff forecast. `every`
+// months apart when > 0, `times` hits in total (0 = open-ended), aimed at
+// one loan or (null) following the strategy's order.
+export interface DebtLump {
+  id: string
+  label: string
+  month: string
+  amount: number
+  every: number
+  times: number
+  loanId: string | null
+}
 
 export interface DebtSettings {
   strategy: DebtStrategy
   snowball: number
   extra: number
   customOrder: string[]
+  lumps: DebtLump[]
 }
 
-export const defaultDebtSettings: DebtSettings = { strategy: 'minimum', snowball: 0, extra: 0, customOrder: [] }
+export const defaultDebtSettings: DebtSettings = { strategy: 'minimum', snowball: 0, extra: 0, customOrder: [], lumps: [] }
 
 const STRATEGIES: DebtStrategy[] = ['minimum', 'snowball', 'avalanche', 'custom']
+const MAX_LUMPS = 50
+
+function cleanLumps (input: unknown): DebtLump[] {
+  if (!Array.isArray(input)) return []
+  const out: DebtLump[] = []
+  const seen = new Set<string>()
+  for (const raw of input) {
+    if (!raw || typeof raw !== 'object') continue
+    const item = raw as Record<string, unknown>
+    const id = typeof item.id === 'string' ? item.id.slice(0, 64) : ''
+    const month = typeof item.month === 'string' && /^\d{4}-(0[1-9]|1[0-2])-01$/.test(item.month) ? item.month : ''
+    const amount = Math.round(Number(item.amount))
+    if (!id || seen.has(id) || !month || !Number.isFinite(amount) || amount <= 0) continue
+    seen.add(id)
+    const every = Math.floor(Number(item.every))
+    const times = Math.floor(Number(item.times))
+    out.push({
+      id,
+      label: typeof item.label === 'string' ? item.label.trim().slice(0, 60) : '',
+      month,
+      amount,
+      every: Number.isFinite(every) ? Math.min(Math.max(every, 0), 120) : 0,
+      times: Number.isFinite(times) ? Math.min(Math.max(times, 0), 600) : 0,
+      loanId: typeof item.loanId === 'string' && item.loanId.length < 100 ? item.loanId : null
+    })
+    if (out.length >= MAX_LUMPS) break
+  }
+  return out
+}
 
 const settingsKey = (owner: string) => `debt-settings:${owner}`
 
@@ -305,7 +349,8 @@ export async function getDebtSettings (owner: string): Promise<DebtSettings> {
     strategy: STRATEGIES.includes(strategy as DebtStrategy) ? strategy as DebtStrategy : 'minimum',
     snowball: typeof stored.snowball === 'number' ? stored.snowball : 0,
     extra: typeof stored.extra === 'number' ? stored.extra : 0,
-    customOrder: Array.isArray(stored.customOrder) ? stored.customOrder.filter(id => typeof id === 'string').slice(0, 100) : []
+    customOrder: Array.isArray(stored.customOrder) ? stored.customOrder.filter(id => typeof id === 'string').slice(0, 100) : [],
+    lumps: cleanLumps(stored.lumps)
   }
 }
 
@@ -317,7 +362,8 @@ export async function putDebtSettings (owner: string, input: Partial<DebtSetting
     extra: Number.isFinite(Number(input.extra)) ? Math.max(Math.round(Number(input.extra)), 0) : current.extra,
     customOrder: Array.isArray(input.customOrder)
       ? input.customOrder.filter(id => typeof id === 'string' && id.length < 100).slice(0, 100)
-      : current.customOrder
+      : current.customOrder,
+    lumps: Array.isArray(input.lumps) ? cleanLumps(input.lumps) : current.lumps
   }
   await kv.set(settingsKey(owner), next)
   return next

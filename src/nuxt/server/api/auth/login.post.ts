@@ -29,13 +29,11 @@ export default defineEventHandler(async (event) => {
   const origin = config.appOrigin || getRequestURL(event).origin
   const link = `${origin}/auth/verify?token=${token}`
 
-  // Designed email (see server/utils/email-templates.ts). The IP feeds the
-  // "didn't request this?" note — best-effort, absent behind some proxies.
+  // Designed email (see server/utils/email-templates.ts).
   const message = magicLinkEmail({
     link,
     expiresMinutes: Math.round(LOGIN_TOKEN_TTL_MS / 60_000),
-    email,
-    requestedAt: new Date()
+    email
   })
 
   await sendEmail(event, { to: email, ...message })

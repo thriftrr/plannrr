@@ -23,7 +23,9 @@ export default defineEventHandler(async (event) => {
   }
 
   const type = file.type?.split(';')[0]?.trim().toLowerCase() || 'application/octet-stream'
-  const upload = new Blob([file.data], { type })
+  // A Node Buffer isn't a BlobPart under the current DOM typings; a plain
+  // Uint8Array view over the same bytes is.
+  const upload = new Blob([new Uint8Array(file.data)], { type })
 
   // Raster formats only: an SVG would be served back same-origin with its
   // scripts intact.
