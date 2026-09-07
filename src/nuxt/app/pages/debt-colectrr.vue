@@ -2596,7 +2596,9 @@ td.actions { white-space: nowrap; text-align: right; }
   position: fixed;
   inset: 0;
   background: rgba(43, 42, 38, 0.45);
-  z-index: 40;
+  /* Above the Feedback FAB (40), level with the import modal — a panel's
+     footer buttons sit exactly where the FAB lives. */
+  z-index: 50;
   display: flex;
   justify-content: flex-end;
 }
