@@ -20,12 +20,19 @@ export function addDebtMonths (key: string, count: number): string {
   return `${Math.floor(index / 12)}-${String((index % 12) + 1).padStart(2, '0')}-01`
 }
 
+// What kind of windfall a lump is. Purely descriptive except for 'boost',
+// which is a temporary monthly top-up (extra $X every month for N months)
+// rather than a dated lump — modelled as `every: 1`.
+export type LumpKind = 'bonus' | 'refund' | 'gift' | 'sale' | 'boost' | 'other'
+export const LUMP_KINDS: LumpKind[] = ['bonus', 'refund', 'gift', 'sale', 'boost', 'other']
+
 // A dated lump sum on top of the monthly plan — a bonus, a tax refund, a
 // gift. `every` > 0 repeats it that many months apart; `times` caps how many
 // hits (0 = keeps going). `loanId` aims it at one loan; null lets it follow
 // the strategy's order like any other surplus.
 export interface LumpPayment {
   id: string
+  kind: LumpKind
   label: string
   month: string
   amount: number
@@ -39,6 +46,7 @@ export interface LumpHit {
   month: string
   amount: number
   loanId: string | null
+  kind: LumpKind
 }
 
 // Unroll repeating lumps into concrete hits on or after `fromMonth`, out to
@@ -56,7 +64,7 @@ export function expandLumpPayments (lumps: LumpPayment[], fromMonth: string, cap
       if (times && k >= times) break
       const month = every ? addDebtMonths(lump.month, k * every) : lump.month
       if (month >= horizon) break
-      if (month >= fromMonth) hits.push({ month, amount: lump.amount, loanId: lump.loanId })
+      if (month >= fromMonth) hits.push({ month, amount: lump.amount, loanId: lump.loanId, kind: lump.kind })
       if (!every) break
     }
   }

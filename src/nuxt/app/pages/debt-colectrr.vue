@@ -587,8 +587,18 @@ const totalInterest = computed(() => selectedResult.value.interest)
 // Bonuses, refunds, gifts: dated lump sums (optionally repeating) that the
 // forecast folds in on top of the monthly plan. Saved with the settings.
 
+const LUMP_META: Record<LumpKind, { icon: string, label: string, hint: string, blurb: string }> = {
+  bonus: { icon: '💼', label: 'Bonus', hint: 'Annual bonus', blurb: 'Work bonus — once, or every year or quarter.' },
+  refund: { icon: '🧾', label: 'Tax refund', hint: 'Tax refund', blurb: 'The refund lands, the debt shrinks.' },
+  gift: { icon: '🎁', label: 'Gift', hint: 'Gift', blurb: 'Money from family or friends.' },
+  sale: { icon: '🏷️', label: 'Sale', hint: 'Sold the old car', blurb: 'Proceeds from selling something.' },
+  boost: { icon: '📈', label: 'Monthly boost', hint: 'Side gig', blurb: 'Extra every month for a while — a side gig, a paused expense.' },
+  other: { icon: '✨', label: 'Windfall', hint: 'Windfall', blurb: 'Anything else that lands on the debt.' }
+}
+
 const lumpEdit = ref<null | {
   id: string | null
+  kind: LumpKind
   label: string
   amount: string
   month: string
@@ -604,15 +614,32 @@ function openLump (id: string | null) {
   lumpEdit.value = existing
     ? {
         id: existing.id,
+        kind: existing.kind,
         label: existing.label,
         amount: (existing.amount / 1000).toFixed(2),
         month: existing.month.slice(0, 7),
         repeat: existing.every > 0 ? 'every' : 'once',
-        every: existing.every > 0 ? String(existing.every) : '3',
+        every: existing.every > 0 ? String(existing.every) : '12',
         times: existing.times > 0 ? String(existing.times) : '',
         loanId: existing.loanId ?? ''
       }
-    : { id: null, label: '', amount: '', month: defaultMonth.slice(0, 7), repeat: 'once', every: '3', times: '', loanId: '' }
+    : { id: null, kind: 'bonus', label: '', amount: '', month: defaultMonth.slice(0, 7), repeat: 'once', every: '12', times: '', loanId: '' }
+}
+
+// Switching kind swaps the shape of the form; a boost is monthly by nature.
+function setLumpKind (kind: LumpKind) {
+  const edit = lumpEdit.value
+  if (!edit) return
+  edit.kind = kind
+  if (kind === 'boost') {
+    edit.repeat = 'every'
+    edit.every = '1'
+    if (!edit.times) edit.times = '6'
+  } else if (edit.every === '1') {
+    edit.repeat = 'once'
+    edit.every = '12'
+    edit.times = ''
+  }
 }
 
 // The editor's current values as a lump — null until the form makes sense.
@@ -621,10 +648,12 @@ const lumpDraft = computed<LumpPayment | null>(() => {
   if (!edit) return null
   const amount = Number.parseFloat(edit.amount.replace(/[$,]/g, ''))
   if (!Number.isFinite(amount) || amount <= 0 || !/^\d{4}-\d{2}$/.test(edit.month)) return null
-  const every = edit.repeat === 'every' ? Math.floor(Number(edit.every)) : 0
-  const times = edit.repeat === 'every' ? Math.floor(Number(edit.times)) : 0
+  const boost = edit.kind === 'boost'
+  const every = boost ? 1 : edit.repeat === 'every' ? Math.floor(Number(edit.every)) : 0
+  const times = boost || edit.repeat === 'every' ? Math.floor(Number(edit.times)) : 0
   return {
     id: edit.id ?? `lump-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: edit.kind,
     label: edit.label.trim().slice(0, 60),
     amount: Math.round(amount * 1000),
     month: `${edit.month}-01`,
@@ -685,17 +714,39 @@ function deleteLump () {
 
 const loanNameById = computed(() => new Map(loans.value.map(loan => [loan.id, loan.name])))
 
-// Chips under the strategy bar, one per scheduled lump.
+// Chips under the strategy bar, one per scheduled lump, each with what it
+// does on its own (the plan with everything else, minus just this one).
 const lumpChips = computed(() => settings.value.lumps.map((lump) => {
   const upcoming = expandLumpPayments([lump], journeyStart.value)
-  const parts = [fmt(lump.amount)]
-  if (lump.every > 0) parts.push(`every ${lump.every} mo from ${shortMonth(lump.month)}${lump.times ? ` ×${lump.times}` : ''}`)
-  else parts.push(shortMonth(lump.month))
+  const parts: string[] = []
+  if (lump.kind === 'boost') {
+    parts.push(`${fmt(lump.amount)}/mo`, lump.times ? `for ${lump.times} mo from ${shortMonth(lump.month)}` : `from ${shortMonth(lump.month)} until debt-free`)
+  } else {
+    parts.push(fmt(lump.amount))
+    if (lump.every > 0) parts.push(`every ${lump.every === 12 ? 'year' : `${lump.every} mo`} from ${shortMonth(lump.month)}${lump.times ? ` ×${lump.times}` : ''}`)
+    else parts.push(shortMonth(lump.month))
+  }
   if (lump.loanId) parts.push(`→ ${loanNameById.value.get(lump.loanId) ?? 'a loan that\'s gone'}`)
+
+  let effect = ''
+  if (upcoming.length && activeLoans.value.length) {
+    const others = settings.value.lumps.filter(item => item.id !== lump.id)
+    const without = strategyResult(settings.value.strategy, expandLumpPayments(others, journeyStart.value))
+    const withAll = selectedResult.value
+    if (without.debtFree && withAll.debtFree) {
+      const diff = monthDiff(withAll.debtFree, without.debtFree)
+      const saved = without.interest - withAll.interest
+      effect = diff ? monthsSooner(diff) : saved > 0 ? `${fmt(saved)} less interest` : 'no change'
+    } else if (withAll.debtFree) {
+      effect = 'what makes debt-free reachable'
+    }
+  }
   return {
     id: lump.id,
-    label: lump.label || (lump.every > 0 ? 'Recurring' : 'One-time'),
+    icon: LUMP_META[lump.kind].icon,
+    label: lump.label || LUMP_META[lump.kind].label,
     detail: parts.join(' · '),
+    effect,
     past: upcoming.length === 0
   }
 }))
@@ -1036,7 +1087,9 @@ interface ChartModel {
   xTicks: Array<{ x: number, label: string }>
   totals: number[]
   lumpMarks: Array<{ x: number, y: number, month: string, amount: number }>
+  boostSpans: Array<{ x1: number, x2: number, label: string }>
   lumpByMonth: Map<string, number>
+  boostByMonth: Map<string, number>
 }
 
 function monthDiff (a: string, b: string): number {
@@ -1139,11 +1192,26 @@ const chart = computed<ChartModel | null>(() => {
   }
 
   const lumpByMonth = new Map<string, number>()
-  for (const hit of journeyHits.value) lumpByMonth.set(hit.month, (lumpByMonth.get(hit.month) ?? 0) + hit.amount)
+  const boostByMonth = new Map<string, number>()
+  for (const hit of journeyHits.value) {
+    const target = hit.kind === 'boost' ? boostByMonth : lumpByMonth
+    target.set(hit.month, (target.get(hit.month) ?? 0) + hit.amount)
+  }
   const lumpMarks: ChartModel['lumpMarks'] = []
   for (const [month, amount] of lumpByMonth) {
     const index = months.indexOf(month)
     if (index > todayIdx && totals[index]! > 0) lumpMarks.push({ x: x(index), y: y(totals[index]!), month, amount })
+  }
+  // A boost is a stretch, not a point: one bracket per boost across the
+  // months it's active (clipped to the chart).
+  const boostSpans: ChartModel['boostSpans'] = []
+  for (const lump of settings.value.lumps) {
+    if (lump.kind !== 'boost') continue
+    const hits = expandLumpPayments([lump], journeyStart.value).filter(hit => months.includes(hit.month) && boostByMonth.has(hit.month))
+    if (!hits.length) continue
+    const first = months.indexOf(hits[0]!.month)
+    const last = months.indexOf(hits[hits.length - 1]!.month)
+    boostSpans.push({ x1: x(first), x2: x(last), label: `${lump.label || LUMP_META.boost.label}: ${fmt(lump.amount)}/mo` })
   }
 
   const yTicks = [0.25, 0.5, 0.75, 1].map(f => ({ y: y(yMax * f), label: fmtShort(yMax * f) }))
@@ -1164,7 +1232,9 @@ const chart = computed<ChartModel | null>(() => {
     xTicks,
     totals,
     lumpMarks,
-    lumpByMonth
+    boostSpans,
+    lumpByMonth,
+    boostByMonth
   }
 })
 
@@ -1414,19 +1484,28 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
         </span>
       </section>
 
-      <section class="lumps-bar" aria-label="One-time payments">
-        <span class="lumps-label" title="Bonuses, refunds, gifts — dated lump sums the forecast folds in on top of the monthly plan">One-time payments</span>
+      <section class="lumps-bar" aria-label="One-time payments and boosts">
+        <span class="lumps-label" title="Bonuses, refunds, gifts, temporary monthly boosts — stack as many as you like; every forecast on this page folds them in">
+          One-time payments &amp; boosts
+        </span>
         <button
           v-for="chip in lumpChips"
           :key="chip.id"
           class="lump-chip"
           :class="{ past: chip.past }"
-          :title="chip.past ? 'Already behind us — no future hits' : 'Edit'"
+          :title="chip.past ? 'Already behind us — no future hits. Click to edit or remove.' : `Edit · on its own: ${chip.effect || '—'}`"
           @click="openLump(chip.id)"
         >
+          <span class="lump-icon" aria-hidden="true">{{ chip.icon }}</span>
           <strong>{{ chip.label }}</strong> <span>{{ chip.detail }}</span>
+          <em v-if="chip.effect && !chip.past">{{ chip.effect }}</em>
         </button>
-        <button class="ghost-btn" :disabled="!activeLoans.length" @click="openLump(null)">+ Add a bonus or lump sum</button>
+        <button class="ghost-btn" :disabled="!activeLoans.length" @click="openLump(null)">
+          {{ lumpChips.length ? '+ Add another' : '+ Add a bonus, refund, or monthly boost' }}
+        </button>
+        <span v-if="!lumpChips.length && activeLoans.length" class="muted">
+          Stack as many as you like — each one shows what it does on its own.
+        </span>
         <span v-if="lumpEffect" class="lumps-effect">
           <template v-if="lumpEffect.monthsSooner !== null">
             {{ fmt(lumpEffect.total) }} across {{ lumpEffect.hits }} {{ lumpEffect.hits === 1 ? 'payment' : 'payments' }}
@@ -1459,6 +1538,12 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
           </g>
 
           <path v-if="chart.trackLine" :d="chart.trackLine" class="track" />
+          <g v-for="(span, i) in chart.boostSpans" :key="`b${i}`" class="boost-span">
+            <title>{{ span.label }}</title>
+            <line :x1="span.x1" :x2="span.x2" :y1="CHART.top + 4" :y2="CHART.top + 4" />
+            <line :x1="span.x1" :x2="span.x1" :y1="CHART.top + 1" :y2="CHART.top + 7" />
+            <line :x1="span.x2" :x2="span.x2" :y1="CHART.top + 1" :y2="CHART.top + 7" />
+          </g>
           <g v-for="mark in chart.lumpMarks" :key="`l${mark.month}`" class="lump-mark">
             <title>{{ shortMonth(mark.month) }}: {{ fmt(mark.amount) }} one-time</title>
             <line :x1="mark.x" :x2="mark.x" :y1="mark.y - 4" :y2="mark.y - 16" />
@@ -1488,6 +1573,10 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
             <span class="tip-name">One-time payment</span>
             <span class="tip-value">+{{ fmt(chart!.lumpByMonth.get(hover.month)!) }}</span>
           </p>
+          <p v-if="chart!.boostByMonth.has(hover.month)" class="tip-row tip-lump">
+            <span class="tip-name">Monthly boost</span>
+            <span class="tip-value">+{{ fmt(chart!.boostByMonth.get(hover.month)!) }}</span>
+          </p>
         </div>
 
         <div class="legend">
@@ -1498,6 +1587,7 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
           <span class="legend-item muted"><span class="chip solid" /> actual</span>
           <span class="legend-item muted"><span class="chip dashed" /> projected</span>
           <span v-if="chart.lumpMarks.length" class="legend-item muted"><span class="chip lump" /> one-time payment</span>
+          <span v-if="chart.boostSpans.length" class="legend-item muted"><span class="chip boost" /> monthly boost</span>
         </div>
 
         <p v-if="debtFreeMonth && pooled" class="payoff-strip">
@@ -1641,8 +1731,9 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
       Synced rows refresh from YNAB when you hit Sync — your APR, Monthly, and
       start-date fixes survive. Manual rows chart a straight paydown between
       their two known points. "Extra next month" lives in each row's ✎ panel
-      and is a one-time what-if that stays in this browser; one-time payments
-      above are saved with your strategy and shape every forecast on this page.
+      and is a one-time what-if that stays in this browser; the one-time
+      payments and boosts above are saved with your strategy and shape every
+      forecast on this page.
     </p>
 
     <PageFooter />
@@ -1805,44 +1896,73 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
     <div v-if="lumpEdit" class="flyout-backdrop" @click.self="lumpEdit = null">
       <aside class="flyout" role="dialog" aria-modal="true" aria-label="One-time payment">
         <header class="flyout-head">
-          <h2>{{ lumpEdit.id ? 'Edit one-time payment' : 'One-time payment' }}</h2>
+          <h2>{{ lumpEdit.id ? 'Edit payment' : 'Add a payment' }}</h2>
           <button class="reset" aria-label="Close" @click="lumpEdit = null">✕</button>
         </header>
         <p class="muted">
-          A bonus, a refund, a gift — money that lands once (or every so often)
-          and goes straight at the debt, on top of the monthly plan.
+          Money on top of the monthly plan — a lump that lands on a date (once
+          or on a rhythm), or a boost that adds a bit every month for a while.
+          Add as many as you like; they stack.
         </p>
+
+        <div class="kind-grid" role="radiogroup" aria-label="Kind of payment">
+          <button
+            v-for="kind in LUMP_KINDS"
+            :key="kind"
+            type="button"
+            class="kind-btn"
+            :class="{ on: lumpEdit.kind === kind }"
+            role="radio"
+            :aria-checked="lumpEdit.kind === kind"
+            :title="LUMP_META[kind].blurb"
+            @click="setLumpKind(kind)"
+          >
+            <span aria-hidden="true">{{ LUMP_META[kind].icon }}</span> {{ LUMP_META[kind].label }}
+          </button>
+        </div>
 
         <div class="edit-fields">
           <div class="edit-grid">
             <label>
               Label
-              <input v-model="lumpEdit.label" placeholder="Annual bonus" aria-label="Label" maxlength="60">
+              <input v-model="lumpEdit.label" :placeholder="LUMP_META[lumpEdit.kind].hint" aria-label="Label" maxlength="60">
             </label>
             <label>
-              Amount $
+              {{ lumpEdit.kind === 'boost' ? 'Extra per month $' : 'Amount $' }}
               <input v-model="lumpEdit.amount" inputmode="decimal" placeholder="0" aria-label="Amount">
             </label>
-            <label>
-              {{ lumpEdit.repeat === 'every' ? 'First payment' : 'Month' }}
-              <input v-model="lumpEdit.month" type="month" aria-label="Month">
-            </label>
-            <label>
-              Repeats
-              <select v-model="lumpEdit.repeat" aria-label="Repeats">
-                <option value="once">Just once</option>
-                <option value="every">Every few months</option>
-              </select>
-            </label>
-            <template v-if="lumpEdit.repeat === 'every'">
+            <template v-if="lumpEdit.kind === 'boost'">
               <label>
-                Every … months
-                <input v-model="lumpEdit.every" inputmode="numeric" placeholder="3" aria-label="Months between payments">
+                Starts
+                <input v-model="lumpEdit.month" type="month" aria-label="First month">
               </label>
               <label>
-                How many times
-                <input v-model="lumpEdit.times" inputmode="numeric" placeholder="until debt-free" aria-label="Number of payments">
+                For … months
+                <input v-model="lumpEdit.times" inputmode="numeric" placeholder="until debt-free" aria-label="How many months">
               </label>
+            </template>
+            <template v-else>
+              <label>
+                {{ lumpEdit.repeat === 'every' ? 'First payment' : 'Month' }}
+                <input v-model="lumpEdit.month" type="month" aria-label="Month">
+              </label>
+              <label>
+                Repeats
+                <select v-model="lumpEdit.repeat" aria-label="Repeats">
+                  <option value="once">Just once</option>
+                  <option value="every">On a rhythm</option>
+                </select>
+              </label>
+              <template v-if="lumpEdit.repeat === 'every'">
+                <label>
+                  Every … months
+                  <input v-model="lumpEdit.every" inputmode="numeric" placeholder="12" aria-label="Months between payments">
+                </label>
+                <label>
+                  How many times
+                  <input v-model="lumpEdit.times" inputmode="numeric" placeholder="until debt-free" aria-label="Number of payments">
+                </label>
+              </template>
             </template>
             <label class="edit-span">
               Goes to
@@ -2229,6 +2349,37 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
 }
 .lump-chip strong { font-weight: 800; white-space: nowrap; }
 .lump-chip span { color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.lump-chip .lump-icon { color: inherit; font-size: 12px; }
+.lump-chip em {
+  font-style: normal;
+  font-weight: 800;
+  font-size: 11px;
+  white-space: nowrap;
+  padding-left: 6px;
+  border-left: 1.5px solid var(--teal);
+}
+.lump-chip.past em { display: none; }
+
+.kind-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 4px; }
+.kind-btn {
+  padding: 7px 8px;
+  border: 1.5px solid var(--border-input);
+  border-radius: var(--r-sm);
+  background: var(--bg-card);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fg-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kind-btn:hover { border-color: var(--teal); color: var(--teal-dark); }
+.kind-btn.on { border-color: var(--teal); background: var(--teal-bg); color: var(--teal-dark); }
+
+.boost-span line { stroke: var(--teal-dark); stroke-width: 2; opacity: 0.7; }
+.chip.boost { background: var(--teal-dark); height: 3px; border-radius: 2px; opacity: 0.7; }
 .lump-chip:hover { background: var(--teal-badge); }
 .lump-chip.past { border-style: dashed; border-color: var(--border-input); background: var(--bg-card); color: var(--fg-subtle); }
 .lump-chip.past span { color: var(--fg-subtle); }

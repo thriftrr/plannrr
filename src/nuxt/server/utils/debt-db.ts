@@ -285,8 +285,12 @@ export type DebtStrategy = 'minimum' | 'snowball' | 'avalanche' | 'custom'
 // A dated lump sum (bonus, refund) folded into the payoff forecast. `every`
 // months apart when > 0, `times` hits in total (0 = open-ended), aimed at
 // one loan or (null) following the strategy's order.
+export type DebtLumpKind = 'bonus' | 'refund' | 'gift' | 'sale' | 'boost' | 'other'
+const LUMP_KINDS: DebtLumpKind[] = ['bonus', 'refund', 'gift', 'sale', 'boost', 'other']
+
 export interface DebtLump {
   id: string
+  kind: DebtLumpKind
   label: string
   month: string
   amount: number
@@ -324,6 +328,7 @@ function cleanLumps (input: unknown): DebtLump[] {
     const times = Math.floor(Number(item.times))
     out.push({
       id,
+      kind: LUMP_KINDS.includes(item.kind as DebtLumpKind) ? item.kind as DebtLumpKind : 'other',
       label: typeof item.label === 'string' ? item.label.trim().slice(0, 60) : '',
       month,
       amount,
