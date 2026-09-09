@@ -155,7 +155,8 @@ export async function createManualDebt (userId: string, input: {
   history?: DebtHistoryPoint[]
   paidIn?: number
 }): Promise<DebtRecord> {
-  const endMonth = input.endMonth ?? new Date().toISOString().slice(0, 7) + '-01'
+  const nowMonth = new Date().toISOString().slice(0, 7) + '-01'
+  const endMonth = input.endMonth ?? nowMonth
   const row = {
     id: `debt_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`,
     userId,
@@ -170,7 +171,11 @@ export async function createManualDebt (userId: string, input: {
     paidIn: input.paidIn ?? Math.max(input.balance - input.startBalance, 0),
     rate: input.rate ?? null,
     minimumPayment: input.minimumPayment ?? null,
-    history: JSON.stringify(input.history?.length ? input.history : linearHistory(input.startMonth, input.startBalance, endMonth, input.balance)),
+    // An active loan's ramp ends now, not at a paid-off month that hasn't
+    // happened yet — same rule as updates.
+    history: JSON.stringify(input.history?.length
+      ? input.history
+      : linearHistory(input.startMonth, input.startBalance, input.balance >= 0 ? endMonth : nowMonth, input.balance)),
     hidden: 0,
     updatedAt: new Date().toISOString()
   }

@@ -463,13 +463,15 @@ function derivedPayment (loan: LoanRow): number {
 const paymentFor = (loan: LoanRow) => derivedPayment(loan)
 const rateFor = (loan: LoanRow) => loan.rate ?? 0
 
+// "Now" for the chart and every projection is the real calendar month, not
+// the latest month any loan has a point for — a hand-tracked loan with a
+// future paid-off month, or a future-dated YNAB transaction, would otherwise
+// drag today into next year. History past this month is treated as
+// projection, and the burndown picks up from here.
 const todayMonth = computed(() => {
-  let latest = ''
-  for (const loan of visibleLoans.value) {
-    const last = loan.history[loan.history.length - 1]?.month ?? ''
-    if (last > latest) latest = last
-  }
-  return latest
+  if (!visibleLoans.value.length) return ''
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
 })
 
 // ---- Strategies -----------------------------------------------------------
