@@ -2,7 +2,7 @@
 // wrong lands the user on the account page with a reason, never a raw error.
 export default defineEventHandler(async (event) => {
   const query = getQuery(event)
-  const back = (status: string) => sendRedirect(event, `/account?ynab=${status}#ynab-token`, 302)
+  const back = (status: string) => sendRedirect(event, `/account?ynab=${status}#ynab`, 302)
 
   const session = await getSessionUser(event)
   const flow = readOauthFlow(event)

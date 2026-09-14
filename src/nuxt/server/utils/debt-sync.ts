@@ -3,10 +3,10 @@
 
 export interface SyncCounts { created: number, updated: number }
 
-export async function syncLiveDebtPlans (owner: string, pat: string, planIds: string[]): Promise<SyncCounts> {
+export async function syncLiveDebtPlans (owner: string, token: string, planIds: string[]): Promise<SyncCounts> {
   let created = 0
   let updated = 0
-  const sources = await fetchLiveDebtSources(pat, planIds)
+  const sources = await fetchLiveDebtSources(token, planIds)
   for (const source of sources) {
     for (const account of source.accounts) {
       const result = await upsertSyncedDebt(owner, 'ynab', `${source.planId}:${account.name}`, {

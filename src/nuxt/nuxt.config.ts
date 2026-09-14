@@ -77,15 +77,18 @@ export default defineNuxtConfig({
   },
 
   runtimeConfig: {
-    // set via NUXT_YNAB_PERSONAL_ACCESS_TOKEN — server-only, never exposed to
-    // the client, and honored in DEV ONLY (personal no-login mode). Production
-    // ignores it entirely: each user must store their own encrypted PAT.
+    // set via NUXT_YNAB_PERSONAL_ACCESS_TOKEN — the operator's OWN token for
+    // the personal no-login mode; server-only, never exposed to the client,
+    // and honored in DEV ONLY. Production ignores it entirely: every user
+    // connects through "Sign in with YNAB", and nobody is ever asked for a
+    // token.
     ynabPersonalAccessToken: '',
     // set NUXT_YNAB_MOCK=1 to serve built-in fixtures instead of calling YNAB
     ynabMock: '',
     // signs session cookies (required in production)
     sessionSecret: '',
-    // encrypts stored YNAB tokens at rest (falls back to sessionSecret)
+    // encrypts stored YNAB tokens at rest (falls back to sessionSecret). The
+    // name is historical — see server/utils/secrets.ts before touching it.
     patSecret: '',
     // Cloudflare Email Sending via REST API; in dev, emails log to the console
     cfAccountId: '',
@@ -96,7 +99,8 @@ export default defineNuxtConfig({
     appOrigin: '',
     // "Sign in with YNAB": an OAuth application from YNAB → Account Settings →
     // Developer. Redirect URI must be <NUXT_APP_ORIGIN>/api/ynab/oauth/callback.
-    // Leave blank and the account page offers the personal-token path only.
+    // Without it YNAB can't be connected at all: the account page offers
+    // export-zip imports and hand-built plans only.
     ynabClientId: '',
     ynabClientSecret: '',
     // comma-separated emails that see the feedback inbox and get notified

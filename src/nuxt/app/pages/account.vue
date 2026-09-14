@@ -5,9 +5,9 @@ import { PALETTES, DEFAULT_PALETTE } from '#shared/types/palette'
 
 const { user, loaded, refresh, logout } = useAuth()
 
-const pat = ref('')
-const patBusy = ref(false)
-const patMessage = ref('')
+// ---- Connect YNAB — "Sign in with YNAB" only (server/api/ynab/oauth) --------
+const ynabBusy = ref(false)
+const ynabMessage = ref('')
 
 const uploadBusy = ref(false)
 const uploadMessage = ref('')
@@ -69,16 +69,16 @@ onMounted(async () => {
   const outcome = route.query.ynab
   if (typeof outcome === 'string') {
     if (outcome === 'connected') {
-      patMessage.value = 'Connected to YNAB — now pick which plans to import.'
+      ynabMessage.value = 'Connected to YNAB — now pick which plans to import.'
       await openPicker()
     } else if (outcome === 'denied') {
-      patMessage.value = 'No problem — nothing was connected.'
+      ynabMessage.value = 'No problem — nothing was connected.'
     } else if (outcome === 'expired') {
-      patMessage.value = 'That sign-in took too long or lost its session — try again.'
+      ynabMessage.value = 'That sign-in took too long or lost its session — try again.'
     } else {
-      patMessage.value = 'YNAB did not finish the sign-in — try again in a moment.'
+      ynabMessage.value = 'YNAB did not finish the sign-in — try again in a moment.'
     }
-    router.replace({ query: {}, hash: '#ynab-token' })
+    router.replace({ query: {}, hash: '#ynab' })
   }
 })
 
@@ -94,9 +94,10 @@ async function deleteAccount () {
   deleteBusy.value = true
   deleteError.value = ''
   try {
-    await $fetch('/api/account', { method: 'DELETE', body: { confirm: deleteConfirm.value } })
+    // POST: Cloudflare Workers drops the body of a DELETE (see the endpoint).
+    await $fetch('/api/account/delete', { method: 'POST', body: { confirm: deleteConfirm.value } })
     user.value = null
-    await navigateTo('/login')
+    await navigateTo('/login?deleted=1')
   } catch (cause: unknown) {
     const err = cause as { data?: { statusMessage?: string } }
     deleteError.value = err.data?.statusMessage ?? 'Could not delete the account — try again.'
@@ -261,7 +262,7 @@ async function loadSources () {
   } catch { /* the card shows its empty state */ }
 }
 
-// After a PAT lands (or on demand): list the budgets it can see and ask which
+// After YNAB connects (or on demand): list the plans it can see and ask which
 // ones to import — local-first, so "import" means snapshot into Plannrr's DB.
 async function openPicker () {
   picker.value = { open: true, loading: true, plans: [], chosen: [], busy: false, error: '' }
@@ -342,34 +343,20 @@ async function deleteSource (row: SourceRow) {
 
 const KIND_LABEL: Record<string, string> = { synced: 'synced', imported: 'import', manual: 'manual' }
 
-// ---- YNAB token + imports --------------------------------------------------
-async function savePat () {
-  if (!pat.value.trim() || patBusy.value) return
-  patBusy.value = true
-  patMessage.value = ''
+// ---- YNAB connection + imports ----------------------------------------------
+async function disconnectYnab () {
+  if (ynabBusy.value) return
+  ynabBusy.value = true
+  ynabMessage.value = ''
   try {
-    await $fetch('/api/account/pat', { method: 'POST', body: { pat: pat.value } })
-    pat.value = ''
-    patMessage.value = 'Token saved — now pick which plans to import.'
+    await $fetch('/api/account/ynab', { method: 'DELETE' })
+    ynabMessage.value = 'Disconnected from YNAB. Your imported plans stay until you remove them.'
     await refresh()
-    await openPicker()
   } catch (cause: unknown) {
     const err = cause as { data?: { statusMessage?: string } }
-    patMessage.value = err.data?.statusMessage ?? 'Could not save the token.'
+    ynabMessage.value = err.data?.statusMessage ?? 'Could not disconnect — try again.'
   } finally {
-    patBusy.value = false
-  }
-}
-
-async function removePat () {
-  patBusy.value = true
-  patMessage.value = ''
-  try {
-    await $fetch('/api/account/pat', { method: 'DELETE' })
-    patMessage.value = 'Disconnected from YNAB. Your imported plans stay until you remove them.'
-    await refresh()
-  } finally {
-    patBusy.value = false
+    ynabBusy.value = false
   }
 }
 
@@ -512,42 +499,29 @@ async function signOut () {
         <p v-if="paletteError" class="y-error msg">{{ paletteError }}</p>
       </section>
 
-      <section id="ynab-token" class="y-card">
+      <section id="ynab" class="y-card">
         <div class="head-row">
           <div class="y-card-title">Connect YNAB</div>
-          <span v-if="user.hasPat" class="y-badge">{{ user.ynabAuth === 'oauth' ? 'Connected · Sign in with YNAB' : 'Connected · token' }}</span>
+          <span v-if="user.ynabConnected" class="y-badge">Connected · Sign in with YNAB</span>
         </div>
         <template v-if="user.ynabOauthAvailable">
           <p class="y-body">
-            Pulls your plans live from YNAB. You'll approve Plannrr on YNAB's own page — no
-            token to copy, and you can revoke it there any time. Access is only ever used
-            server-side and never shown to anyone.
+            Pulls your plans live from YNAB. You'll approve Plannrr on YNAB's own page — nothing
+            to copy or paste, and you can revoke access there any time under Account Settings →
+            Developer. Access is only ever used server-side and never shown to anyone.
           </p>
           <div class="row">
-            <a class="y-btn oauth-btn" href="/api/ynab/oauth/start">{{ user.ynabAuth === 'oauth' ? 'Reconnect with YNAB' : 'Sign in with YNAB' }}</a>
-            <button v-if="user.hasPat" class="y-btn-secondary" type="button" :disabled="patBusy" @click="removePat">Disconnect</button>
+            <a class="y-btn oauth-btn" href="/api/ynab/oauth/start">{{ user.ynabConnected ? 'Reconnect with YNAB' : 'Sign in with YNAB' }}</a>
+            <button v-if="user.ynabConnected" class="y-btn-secondary" type="button" :disabled="ynabBusy" @click="disconnectYnab">Disconnect</button>
           </div>
         </template>
-        <template v-else>
-          <p class="y-body">
-            Pulls your plans live from YNAB. Create a personal access token under
-            <a href="https://app.ynab.com/settings/developer" target="_blank" rel="noopener">YNAB → Account Settings → Developer</a>.
-            It's stored encrypted and only ever used server-side.
-          </p>
-          <form class="row" @submit.prevent="savePat">
-            <input
-              v-model="pat"
-              class="y-input grow"
-              type="password"
-              :placeholder="user.hasPat ? 'Replace saved token…' : 'Paste your token…'"
-              aria-label="YNAB personal access token"
-              autocomplete="off"
-            >
-            <button class="y-btn" type="submit" :disabled="patBusy || !pat.trim()">Save</button>
-            <button v-if="user.hasPat" class="y-btn-secondary" type="button" :disabled="patBusy" @click="removePat">Remove</button>
-          </form>
-        </template>
-        <p v-if="patMessage" class="y-tiny note">{{ patMessage }}</p>
+        <p v-else class="y-body">
+          Sign in with YNAB isn't set up on this copy of Plannrr, so live sync is off. You can
+          still <a href="#sources">import a YNAB export zip</a> or build a plan by hand below.
+          Self-hosting? Register an OAuth application with YNAB and set
+          <code>NUXT_YNAB_CLIENT_ID</code> / <code>NUXT_YNAB_CLIENT_SECRET</code> (see the README).
+        </p>
+        <p v-if="ynabMessage" class="y-tiny note">{{ ynabMessage }}</p>
         <div v-if="picker.open" class="picker">
           <div class="picker-head">Which plans should Plannrr import?</div>
           <p class="y-tiny picker-sub">
@@ -575,7 +549,7 @@ async function signOut () {
           </template>
           <p v-if="picker.error" class="y-error msg">{{ picker.error }}</p>
         </div>
-        <div v-if="user.hasPat" class="row resync">
+        <div v-if="user.ynabConnected" class="row resync">
           <button class="y-btn-outline" :disabled="resyncBusy || cooldown > 0" @click="resyncNow">
             {{ resyncBusy ? 'Syncing…' : '⟳ Re-sync from YNAB' }}
           </button>
@@ -646,7 +620,7 @@ async function signOut () {
         <div class="zip-block">
           <div class="zip-title">Import a YNAB export zip</div>
           <p class="y-body">
-            No token needed: in YNAB, choose <i>Export Plan Data</i> and upload the zip here.
+            No YNAB sign-in needed: in YNAB, choose <i>Export Plan Data</i> and upload the zip here.
             Exports don't include goals, so each category's assigned amount becomes its
             monthly baseline in Tinkrr.
           </p>
@@ -790,7 +764,7 @@ h1 { font-size: 26px; }
 
 .open { display: inline-block; margin-top: 20px; font-weight: 800; font-size: 14px; }
 
-/* ---- budget picker (post-PAT) ---- */
+/* ---- plan picker (after connecting YNAB) ---- */
 .picker {
   margin-top: 14px;
   border: 1.5px solid var(--teal-border);

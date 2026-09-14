@@ -2,8 +2,8 @@
 // reads the snapshot — YNAB is only touched again by an explicit re-sync.
 export default defineEventHandler(async (event) => {
   const owner = await requireDebtOwner(event)
-  const pat = await resolvePat(event)
-  if (!pat) throw createError({ statusCode: 400, statusMessage: 'Save a YNAB token first' })
+  const token = await resolveYnabAccessToken(event)
+  if (!token) throw createError({ statusCode: 400, statusMessage: 'Sign in with YNAB first — connect it on the Account page' })
 
   const body = await readBody<{ planIds?: string[] }>(event)
   const planIds = (body?.planIds ?? []).filter(id => typeof id === 'string').slice(0, 20)
@@ -16,9 +16,9 @@ export default defineEventHandler(async (event) => {
 
   let livePlans: Array<{ id: string, name: string, currency_format?: { iso_code: string, currency_symbol: string } | null }>
   try {
-    livePlans = (await ynabApi<{ plans: typeof livePlans }>(pat, '/plans')).plans
+    livePlans = (await ynabApi<{ plans: typeof livePlans }>(token, '/plans')).plans
   } catch {
-    throw createError({ statusCode: 502, statusMessage: 'YNAB rejected the token — check it under YNAB → Account Settings → Developer' })
+    throw createError({ statusCode: 502, statusMessage: 'YNAB rejected the connection — reconnect with YNAB on the Account page' })
   }
 
   let created = 0
@@ -26,7 +26,7 @@ export default defineEventHandler(async (event) => {
   for (const planId of planIds) {
     const plan = livePlans.find(p => p.id === planId)
     if (!plan) continue
-    const snapshot = await snapshotYnabPlan(pat, plan)
+    const snapshot = await snapshotYnabPlan(token, plan)
     const existing = await findSourceByYnabPlan(owner, plan.id)
     const sourceId = existing?.id ?? `${SOURCE_PREFIX}${crypto.randomUUID()}`
     await saveSnapshot(owner, sourceId, snapshot)

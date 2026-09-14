@@ -27,9 +27,9 @@ onMounted(async () => {
   }
 
   try {
-    const status = await $fetch<{ mock: boolean, hasPat: boolean, hasEnvPat: boolean }>('/api/ynab/status')
+    const status = await $fetch<{ mock: boolean, ynabConnected: boolean, hasEnvPat: boolean }>('/api/ynab/status')
     isMock.value = status.mock
-    hasWorkingPat.value = status.hasPat || status.hasEnvPat
+    ynabConnected.value = status.ynabConnected || status.hasEnvPat
     await refreshAuth()
     await sel.load()
     if (!sel.plans.value.length) {
@@ -995,7 +995,7 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 // Which selected plans can push: snapshot sources synced from YNAB (any plan
 // counts in mock mode — the server answers without writing).
-const hasWorkingPat = ref(false)
+const ynabConnected = ref(false)
 const provenSync = ref(false)
 const sourceKinds = ref<Record<string, string>>({})
 let sourceKindsLoaded = false
@@ -1005,8 +1005,8 @@ async function loadSourceKinds (force = false) {
   try {
     const data = await $fetch<{ sources: Array<{ id: string, kind: string, lastSyncedAt: string | null }> }>('/api/sources')
     sourceKinds.value = Object.fromEntries(data.sources.map(row => [row.id, row.kind]))
-    // "Proven": at least one synced source has actually pulled with this
-    // account's token — the bar for letting anyone push.
+    // "Proven": at least one synced source has actually pulled through this
+    // account's YNAB connection — the bar for letting anyone push.
     provenSync.value = data.sources.some(row => row.kind === 'synced' && row.lastSyncedAt)
     sourceKindsLoaded = true
   } catch { /* derivation treats everything as non-pushable until this loads */ }
@@ -1411,9 +1411,9 @@ async function linkManualSource (planId: string) {
   }
 }
 
-// Pushing is earned: a saved token AND a successful pull with it. Anything
+// Pushing is earned: a YNAB connection AND a successful pull with it. Anything
 // less gets the Tinkrr Diff — the identical review, reading-only.
-const canPush = computed(() => isMock.value || (hasWorkingPat.value && provenSync.value))
+const canPush = computed(() => isMock.value || (ynabConnected.value && provenSync.value))
 
 const syncActions = computed(() => syncDerivation.value.actions)
 const syncNotes = computed(() => syncDerivation.value.notes)
@@ -1928,24 +1928,18 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
       <section v-if="connectError || noSources" class="y-card empty-state">
         <h2>{{ connectError ? 'Something went wrong' : 'No plans connected yet' }}</h2>
         <p v-if="!authUser" class="y-body">
-          <NuxtLink to="/login">Sign in</NuxtLink> to import a YNAB export or connect your
-          own access token — or run the app in mock mode to play with sample data.
+          <NuxtLink to="/login">Sign in</NuxtLink> to import a YNAB export or sign in with
+          YNAB — or run the app in mock mode to play with sample data.
         </p>
         <p v-else class="y-body">
           Head to your <NuxtLink to="/account">account</NuxtLink> to import a YNAB export zip
-          or save a personal access token, then come back here.
+          or sign in with YNAB, then come back here.
         </p>
       </section>
 
       <p v-else-if="loading && !hasAnyDetail" class="y-body loading-note">Loading plans…</p>
 
       <template v-else>
-        <div v-if="sel.patError.value" class="y-banner warn-banner">
-          <span class="y-dot idle" />
-          Your saved YNAB token stopped working — live plans are hidden.
-          <NuxtLink to="/account" class="b">Update it in your account</NuxtLink>
-        </div>
-
         <div class="chips" role="tablist" aria-label="Filter rows">
           <button
             v-for="c in chips"
@@ -2306,7 +2300,7 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
           </p>
           <p v-else class="sync-lede">
             Everything you've changed this month, grouped the way a sync would apply it.
-            Once YNAB is connected with a working token, this exact list becomes pushable.
+            Once YNAB is connected and synced, this exact list becomes pushable.
           </p>
           <div class="sync-groups">
             <div v-for="g in syncGroupRows" :key="g.kind" class="sync-group">
@@ -2396,7 +2390,7 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
           <div v-else class="sync-foot">
             <span class="sync-summary">
               {{ syncActions.length }} {{ syncActions.length === 1 ? 'change' : 'changes' }} ·
-              save a YNAB token and run a sync on the <NuxtLink to="/account">Account page</NuxtLink> to make this pushable
+              sign in with YNAB and run a sync on the <NuxtLink to="/account">Account page</NuxtLink> to make this pushable
             </span>
             <button class="y-btn-secondary" @click="closeSync">Close</button>
           </div>
@@ -2644,8 +2638,6 @@ function targetActionDetail (category: Category, draft: TargetDraft) {
 .help-copy code { background: var(--bg-card); padding: 1px 5px; border-radius: 4px; }
 .help .y-btn-outline { flex: none; }
 
-.warn-banner { margin-top: 16px; }
-.warn-banner .b { font-weight: 700; }
 .y-dot.idle { background: var(--fg-faint); }
 
 .empty-state { margin-top: 16px; }

@@ -110,8 +110,8 @@ export default defineEventHandler(async (event) => {
   if (!source || source.kind !== 'synced' || !source.ynabPlanId) {
     throw createError({ statusCode: 400, statusMessage: 'Only plans synced from YNAB can push back' })
   }
-  const pat = await resolvePat(event)
-  if (!pat) throw createError({ statusCode: 400, statusMessage: 'Save a YNAB token first' })
+  const token = await resolveYnabAccessToken(event)
+  if (!token) throw createError({ statusCode: 400, statusMessage: 'Sign in with YNAB first — connect it on the Account page' })
 
   const plan = source.ynabPlanId
   const action = body?.action
@@ -123,7 +123,7 @@ export default defineEventHandler(async (event) => {
         const month = MONTH_RE.test(body?.month ?? '') ? body!.month : null
         if (!month) throw createError({ statusCode: 400, statusMessage: 'A month is required for plan updates' })
         const categoryId = cleanUuid(action.categoryId, 'category')
-        await ynabApi(pat, `/plans/${plan}/months/${month}/categories/${categoryId}`, {
+        await ynabApi(token, `/plans/${plan}/months/${month}/categories/${categoryId}`, {
           method: 'PATCH',
           body: { category: { budgeted: cleanAmount(action.budgeted) } }
         })
@@ -133,7 +133,7 @@ export default defineEventHandler(async (event) => {
         // Makes the draft the category's actual goal target (simple monthly
         // goals only — the client gates which categories offer this).
         const categoryId = cleanUuid(action.categoryId, 'category')
-        await ynabApi(pat, `/plans/${plan}/categories/${categoryId}`, {
+        await ynabApi(token, `/plans/${plan}/categories/${categoryId}`, {
           method: 'PATCH',
           body: { category: { goal_target: cleanAmount(action.goalTarget) } }
         })
@@ -146,7 +146,7 @@ export default defineEventHandler(async (event) => {
         const category = action.goalTarget === null
           ? { goal_target: null }
           : goalShape(action.goalTarget, action)
-        await ynabApi(pat, `/plans/${plan}/categories/${categoryId}`, {
+        await ynabApi(token, `/plans/${plan}/categories/${categoryId}`, {
           method: 'PATCH',
           body: { category }
         })
@@ -154,7 +154,7 @@ export default defineEventHandler(async (event) => {
       }
       case 'rename': {
         const categoryId = cleanUuid(action.categoryId, 'category')
-        await ynabApi(pat, `/plans/${plan}/categories/${categoryId}`, {
+        await ynabApi(token, `/plans/${plan}/categories/${categoryId}`, {
           method: 'PATCH',
           body: { category: { name: cleanName(action.name) } }
         })
@@ -162,14 +162,14 @@ export default defineEventHandler(async (event) => {
       }
       case 'move': {
         const categoryId = cleanUuid(action.categoryId, 'category')
-        await ynabApi(pat, `/plans/${plan}/categories/${categoryId}`, {
+        await ynabApi(token, `/plans/${plan}/categories/${categoryId}`, {
           method: 'PATCH',
           body: { category: { category_group_id: cleanUuid(action.groupId, 'group') } }
         })
         break
       }
       case 'create-group': {
-        const res = await ynabApi<{ category_group?: { id?: string } }>(pat, `/plans/${plan}/category_groups`, {
+        const res = await ynabApi<{ category_group?: { id?: string } }>(token, `/plans/${plan}/category_groups`, {
           method: 'POST',
           body: { category_group: { name: cleanName(action.name) } }
         })
@@ -192,13 +192,13 @@ export default defineEventHandler(async (event) => {
         if (hasTarget && !patchShape) {
           category.goal_target = cleanAmount(action.goalTarget as number)
         }
-        const res = await ynabApi<{ category?: { id?: string } }>(pat, `/plans/${plan}/categories`, {
+        const res = await ynabApi<{ category?: { id?: string } }>(token, `/plans/${plan}/categories`, {
           method: 'POST',
           body: { category }
         })
         createdId = res.category?.id ?? null
         if (patchShape && createdId) {
-          await ynabApi(pat, `/plans/${plan}/categories/${createdId}`, {
+          await ynabApi(token, `/plans/${plan}/categories/${createdId}`, {
             method: 'PATCH',
             body: { category: patchShape }
           })
@@ -222,10 +222,10 @@ export default defineEventHandler(async (event) => {
   if (body?.finalize) {
     // Pull the fresh truth back down so the local copy matches what we wrote.
     try {
-      const live = (await ynabApi<{ plans: Array<{ id: string, name: string, currency_format?: { iso_code: string, currency_symbol: string } | null }> }>(pat, '/plans')).plans
+      const live = (await ynabApi<{ plans: Array<{ id: string, name: string, currency_format?: { iso_code: string, currency_symbol: string } | null }> }>(token, '/plans')).plans
       const planMeta = live.find(p => p.id === plan)
       if (planMeta) {
-        const snapshot = await snapshotYnabPlan(pat, planMeta)
+        const snapshot = await snapshotYnabPlan(token, planMeta)
         await saveSnapshot(owner, source.id, snapshot)
         await upsertPlanSource({
           id: source.id,

@@ -1,10 +1,14 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 
-// AES-256-GCM for YNAB tokens at rest. The key derives from NUXT_PAT_SECRET
-// (falling back to the session secret) so a copied database alone can't
-// reveal tokens.
+// AES-256-GCM for the "Sign in with YNAB" tokens at rest (and the short-lived
+// OAuth flow cookie). The key derives from NUXT_PAT_SECRET (falling back to
+// the session secret) so a copied database alone can't reveal tokens.
+//
+// The env var name and the `ynabrr-pat:` label date from when pasted personal
+// access tokens were supported. Both are load-bearing: changing either alters
+// the derived key and makes every stored token unreadable.
 
-function patKey (): Buffer {
+function tokenKey (): Buffer {
   const config = useRuntimeConfig()
   const secret = config.patSecret || config.sessionSecret
     || (import.meta.dev ? 'ynabrr-dev-pat-secret-not-for-production' : '')
@@ -16,7 +20,7 @@ function patKey (): Buffer {
 
 export function encryptSecret (plain: string): string {
   const iv = randomBytes(12)
-  const cipher = createCipheriv('aes-256-gcm', patKey(), iv)
+  const cipher = createCipheriv('aes-256-gcm', tokenKey(), iv)
   const data = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()])
   return [iv.toString('base64url'), cipher.getAuthTag().toString('base64url'), data.toString('base64url')].join('.')
 }
@@ -25,7 +29,7 @@ export function decryptSecret (sealed: string): string | null {
   try {
     const [iv, tag, data] = sealed.split('.')
     if (!iv || !tag || !data) return null
-    const decipher = createDecipheriv('aes-256-gcm', patKey(), Buffer.from(iv, 'base64url'))
+    const decipher = createDecipheriv('aes-256-gcm', tokenKey(), Buffer.from(iv, 'base64url'))
     decipher.setAuthTag(Buffer.from(tag, 'base64url'))
     return Buffer.concat([decipher.update(Buffer.from(data, 'base64url')), decipher.final()]).toString('utf8')
   } catch {

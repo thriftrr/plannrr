@@ -71,6 +71,13 @@
       "when": 1788369369916,
       "tag": "0009_ynab_oauth",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1789420795340,
+      "tag": "0010_drop_pat_cipher",
+      "breakpoints": true
     }
   ]
 }

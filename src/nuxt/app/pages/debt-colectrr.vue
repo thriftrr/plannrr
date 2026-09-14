@@ -193,7 +193,7 @@ async function syncNow () {
       method: 'POST',
       body: { planIds: selectedPlanIds.value }
     })
-    syncMessage.value = `${result.created} new · ${result.updated} refreshed${result.live_error ? ' · YNAB unreachable (token?)' : ''}`
+    syncMessage.value = `${result.created} new · ${result.updated} refreshed${result.live_error ? ' · YNAB unreachable (reconnect on the Account page?)' : ''}`
     await loadDebts()
   } catch (cause: unknown) {
     const err = cause as { data?: { statusMessage?: string } }
@@ -1372,7 +1372,7 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
       </template>
       <span v-else class="muted">
         No YNAB connected — this page works fine without it (add debts by hand
-        below), or connect a token / import a zip on
+        below), or sign in with YNAB / import a zip on
         <NuxtLink to="/account">your account</NuxtLink>.
       </span>
       <span v-if="syncMessage" class="sync-msg">{{ syncMessage }}</span>
@@ -1385,7 +1385,7 @@ const strategyLabel = computed(() => STRATEGY_META[settings.value.strategy].labe
       <h2>No debts tracked yet</h2>
       <p v-if="!authUser && !isMock">
         <NuxtLink to="/login">Sign in</NuxtLink> (just an email — no YNAB needed)
-        and add your debts by hand below. If you do use YNAB, connect a token or
+        and add your debts by hand below. If you do use YNAB, sign in with YNAB or
         import an export on your account page and <em>Sync now</em> pulls them in.
       </p>
       <p v-else-if="syncPlans.length">

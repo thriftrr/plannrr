@@ -42,14 +42,14 @@ export default defineEventHandler(async (event) => {
   }
 
   if (liveIds.length) {
-    const pat = await resolvePat(event)
-    if (!pat) {
+    const token = await resolveYnabAccessToken(event)
+    if (!token) {
       liveError = true
     } else {
       // Same per-owner window as the Account page's re-sync button.
       await assertSyncAllowed(owner)
       try {
-        const counts = await syncLiveDebtPlans(owner, pat, liveIds)
+        const counts = await syncLiveDebtPlans(owner, token, liveIds)
         created += counts.created
         updated += counts.updated
         await recordSync(owner)

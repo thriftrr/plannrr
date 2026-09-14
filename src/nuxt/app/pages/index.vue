@@ -3,7 +3,7 @@ const { user, displayName, refresh } = useAuth()
 const { format } = useMoney()
 const stats = useHomeStats()
 
-type ServerStatus = { mock: boolean, authenticated: boolean, hasPat: boolean, hasEnvPat: boolean }
+type ServerStatus = { mock: boolean, authenticated: boolean, ynabConnected: boolean, hasEnvPat: boolean }
 const serverStatus = ref<ServerStatus | null>(null)
 const pending = ref(true)
 
@@ -71,7 +71,7 @@ const skipBusy = ref(false)
 const setupSteps = computed(() => {
   const u = user.value
   if (!u) return []
-  const connected = u.hasPat || stats.planCount.value > 0
+  const connected = u.ynabConnected || stats.planCount.value > 0
   return [
     {
       key: 'photo',
@@ -102,7 +102,7 @@ const setupSteps = computed(() => {
       done: connected,
       title: 'Connect your plan',
       blurb: 'Three ways in — pick whichever fits how you use YNAB.',
-      to: '/account#ynab-token',
+      to: '/account#ynab',
       cta: 'Connect a plan'
     }
   ]
@@ -159,7 +159,7 @@ const icon = {
       <template v-else-if="user">
         <span class="y-dot idle" />
         Signed in as <b>{{ user.email }}</b> — no plans yet.
-        <NuxtLink to="/account" class="b">Import an export or add a token</NuxtLink>
+        <NuxtLink to="/account" class="b">Sign in with YNAB or import an export</NuxtLink>
       </template>
       <template v-else>
         <span class="y-dot idle" />
@@ -184,10 +184,10 @@ const icon = {
             <p class="y-small">{{ step.blurb }}</p>
             <ul v-if="step.key === 'budget' && !step.done" class="setup-ways">
               <li>
-                <NuxtLink to="/account#ynab-token"><b>A YNAB access token</b></NuxtLink> — live sync both ways, the best option if you use YNAB every day.
+                <NuxtLink to="/account#ynab"><b>Sign in with YNAB</b></NuxtLink> — live sync both ways, the best option if you use YNAB every day.
               </li>
               <li>
-                <NuxtLink to="/account#sources"><b>A YNAB export zip</b></NuxtLink> — no token needed; a point-in-time copy you refresh by importing again.
+                <NuxtLink to="/account#sources"><b>A YNAB export zip</b></NuxtLink> — no YNAB sign-in needed; a point-in-time copy you refresh by importing again.
               </li>
               <li>
                 <NuxtLink to="/tinkrr"><b>Build one by hand in Tinkrr</b></NuxtLink> — no YNAB at all; your currency comes from the profile above.

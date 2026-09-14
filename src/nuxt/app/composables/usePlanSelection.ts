@@ -8,12 +8,10 @@ export function usePlanSelection () {
   const plans = useState<PlanSummary[]>('plan-sel-plans', () => [])
   const selectedIds = useState<string[]>('plan-sel-ids', () => [])
   const loaded = useState<boolean>('plan-sel-loaded', () => false)
-  const patError = useState<boolean>('plan-sel-pat-error', () => false)
 
   async function load () {
-    const data = await $fetch<{ plans: PlanSummary[], default_plan: PlanSummary | null, pat_error?: boolean }>('/api/ynab/plans')
+    const data = await $fetch<{ plans: PlanSummary[], default_plan: PlanSummary | null }>('/api/ynab/plans')
     plans.value = data.plans
-    patError.value = Boolean(data.pat_error)
 
     let stored: string[] = []
     try {
@@ -49,5 +47,5 @@ export function usePlanSelection () {
     return sel.length === 1 ? sel[0]!.name : `${sel.length} plans`
   })
 
-  return { plans, selectedIds, selectedPlans, loaded, patError, label, load, toggle }
+  return { plans, selectedIds, selectedPlans, loaded, label, load, toggle }
 }

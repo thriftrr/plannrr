@@ -18,15 +18,15 @@ export default defineEventHandler(async (event) => {
   if (!source || source.kind !== 'synced' || !source.ynabPlanId) {
     throw createError({ statusCode: 400, statusMessage: 'Only plans synced from YNAB have live account balances' })
   }
-  const pat = await resolvePat(event)
-  if (!pat) throw createError({ statusCode: 400, statusMessage: 'Save a YNAB token first' })
+  const token = await resolveYnabAccessToken(event)
+  if (!token) throw createError({ statusCode: 400, statusMessage: 'Sign in with YNAB first — connect it on the Account page' })
 
   await assertRateLimit([{ key: `accounts:${owner}:${planId}`, limit: 12, windowSeconds: 600 }])
 
   type ApiAccount = { id: string, name: string, type: string, on_budget?: boolean, closed?: boolean, deleted?: boolean, balance: number }
   let accounts: BudgetAccount[]
   try {
-    const res = await ynabApi<{ accounts: ApiAccount[] }>(pat, `/plans/${source.ynabPlanId}/accounts`)
+    const res = await ynabApi<{ accounts: ApiAccount[] }>(token, `/plans/${source.ynabPlanId}/accounts`)
     accounts = res.accounts
       .filter(a => a.on_budget && !a.closed && !a.deleted)
       .map(a => ({ id: a.id, name: a.name, type: a.type, balance: a.balance }))

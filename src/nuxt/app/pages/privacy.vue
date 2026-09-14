@@ -1,7 +1,7 @@
 <script setup lang="ts">
 useHead({ title: 'Privacy — Plannrr' })
 definePageMeta({ layout: 'auth' })
-const UPDATED = 'September 2, 2026'
+const UPDATED = 'September 14, 2026'
 </script>
 
 <template>
@@ -21,7 +21,7 @@ const UPDATED = 'September 2, 2026'
       <ul>
         <li><b>Your email address</b> — to sign you in with a magic link and to reach you about your account. Nothing else is sent to it.</li>
         <li><b>Profile details you choose to add</b> — a name, a currency, a colour palette, an optional profile picture.</li>
-        <li><b>YNAB access</b> — either a personal access token you paste, or the tokens YNAB issues when you choose “Sign in with YNAB”. These are stored encrypted (AES-256-GCM) with a key that lives outside the database, are only ever used on the server, and are never shown back to you or anyone else.</li>
+        <li><b>YNAB access</b> — the tokens YNAB issues when you choose “Sign in with YNAB”. Plannrr never asks for a personal access token. These are stored encrypted (AES-256-GCM) with a key that lives outside the database, are only ever used on the server, and are never shown back to you or anyone else.</li>
         <li><b>A copy of the plans you pick</b> — categories, targets, months, scheduled transactions, a window of the register, and on-budget account balances — so pages load from Plannrr's own copy and YNAB is only contacted when you sync. Nothing you don't choose to import is read.</li>
         <li><b>Things you create here</b> — what-if drafts, hand-tracked debts, calendar preferences, story cards, feedback you send.</li>
       </ul>

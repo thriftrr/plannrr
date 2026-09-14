@@ -1,6 +1,7 @@
-// YNAB OAuth (Authorization Code + PKCE, server side). Tokens are stored
-// encrypted like the PAT; access tokens live two hours and are refreshed
-// just before use, so pages never see an expired one.
+// YNAB OAuth (Authorization Code + PKCE, server side) — the only way Plannrr
+// holds YNAB access. Tokens are stored encrypted at rest (secrets.ts); access
+// tokens live two hours and are refreshed just before use, so pages never see
+// an expired one.
 // https://api.ynab.com/#oauth-applications
 import { createHash, randomBytes } from 'node:crypto'
 import type { H3Event } from 'h3'
@@ -96,7 +97,7 @@ export async function exchangeOauthCode (event: H3Event, userId: string, code: s
 
 // A usable access token for this user, refreshed when it's about to expire.
 // Null when the user never connected via OAuth or the refresh was rejected
-// (revoked in YNAB) — callers then fall back to a PAT, if any.
+// (revoked in YNAB) — callers then ask the person to reconnect.
 export async function resolveOauthAccessToken (user: DbUser): Promise<string | null> {
   if (!user.ynabRefreshCipher) return null
   const expiresAt = user.ynabAccessExpiresAt ? Date.parse(user.ynabAccessExpiresAt) : 0

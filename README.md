@@ -50,20 +50,20 @@ A signed-in user can connect plans two ways:
    "- Plan.csv" and older "- Budget.csv" formats parse; monthly income is
    derived from Register inflows. Exports carry no goals, so each category's
    assigned amount becomes its monthly baseline in the sandbox.
-2. **Sign in with YNAB** (OAuth, Authorization Code + PKCE) — the way a public
-   instance should connect: the person approves Plannrr on YNAB's own page,
-   tokens are stored AES-256-GCM encrypted and refreshed server-side. Needs
-   `NUXT_YNAB_CLIENT_ID` / `NUXT_YNAB_CLIENT_SECRET` from an OAuth application
-   created under YNAB → Account Settings → Developer, with redirect URI
-   `<NUXT_APP_ORIGIN>/api/ynab/oauth/callback`. New OAuth apps are capped at
-   25 users until YNAB reviews them.
-3. **Paste a personal access token** — for your own self-hosted copy only.
-   YNAB's terms keep tokens with their owner, so the token field disappears
-   (and the endpoint refuses) as soon as OAuth is configured.
+2. **Sign in with YNAB** (OAuth, Authorization Code + PKCE) — the only way
+   Plannrr ever holds YNAB access: the person approves Plannrr on YNAB's own
+   page, tokens are stored AES-256-GCM encrypted and refreshed server-side.
+   Needs `NUXT_YNAB_CLIENT_ID` / `NUXT_YNAB_CLIENT_SECRET` from an OAuth
+   application created under YNAB → Account Settings → Developer, with
+   redirect URI `<NUXT_APP_ORIGIN>/api/ynab/oauth/callback`. New OAuth apps
+   are capped at 25 users until YNAB reviews them. Without OAuth configured,
+   an instance offers zip imports and hand-built plans only.
 
-`NUXT_YNAB_PERSONAL_ACCESS_TOKEN` in `.env` still works as a personal
-single-user mode (no sign-in needed), and `make up-mock` remains the
-zero-setup demo.
+Plannrr never asks anyone for a personal access token — YNAB's API terms keep
+those with their owner, and the old paste-a-token option was removed for that
+reason. The one exception is local development: `NUXT_YNAB_PERSONAL_ACCESS_TOKEN`
+in `.env` is *your own* token for a personal, no-sign-in mode on your own
+machine, and production ignores it. `make up-mock` remains the zero-setup demo.
 
 Storage is NuxtHub: drizzle over SQLite/D1 (`server/db/schema.ts`, migrations
 via `npx nuxt db generate`) plus KV for parsed imports.
@@ -97,8 +97,9 @@ imports + cache), and an R2 bucket (profile pictures). Everything is created in
    wrangler printed, plus `NUXT_CF_ACCOUNT_ID`, `NUXT_ADMIN_EMAILS` (who may
    open the feedback inbox), a generated `NUXT_SESSION_SECRET`, and the
    email-sending settings above.
-3. `make secrets` pushes the secret values (session secret, PAT secret, email
-   token) to the worker. Run it again whenever one changes.
+3. `make secrets` pushes the secret values (session secret, token-encryption
+   secret, email token, YNAB client secret) to the worker. Run it again
+   whenever one changes.
 4. `make deploy` builds with the Cloudflare preset, applies pending D1
    migrations, and deploys. Non-secret settings (admin emails, from address,
    app origin) ride along as worker vars on every deploy.
@@ -126,9 +127,10 @@ sending domain before inviting anyone.
 - **Sessions are 30-day signed JWTs** in an httpOnly, SameSite=Lax cookie.
   Logout clears the cookie but cannot revoke a stolen token; rotate
   `NUXT_SESSION_SECRET` (`make secrets`) to invalidate every session at once.
-- **YNAB tokens** are stored AES-256-GCM encrypted under `NUXT_PAT_SECRET`
-  (falls back to the session secret) and never leave the server. Changing
-  that secret makes every stored token unreadable — users re-enter theirs.
+- **YNAB tokens** (from Sign in with YNAB) are stored AES-256-GCM encrypted
+  under `NUXT_PAT_SECRET` (falls back to the session secret; the name is
+  historical) and never leave the server. Changing that secret makes every
+  stored token unreadable — users reconnect with YNAB.
 - Uploads are bounded (1MB raster images, 20MB export zips with a 64MB
   inflate cap per CSV), other API bodies at 2MB, and responses carry a
   Content-Security-Policy plus the usual hardening headers.

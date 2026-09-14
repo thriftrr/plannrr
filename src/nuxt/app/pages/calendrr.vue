@@ -939,7 +939,7 @@ const confidencePill: Record<string, { label: string, tone: string }> = {
     <section v-else-if="noPlans || connectError" class="y-banner state">
       <span class="y-dot idle" />
       {{ connectError ? 'Something went wrong reaching your plans.' : 'No plans connected yet.' }}
-      <NuxtLink to="/account" class="b">Add a token or import an export</NuxtLink>
+      <NuxtLink to="/account" class="b">Sign in with YNAB or import an export</NuxtLink>
     </section>
 
     <div v-else class="cal">

@@ -4,9 +4,11 @@ import { integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core'
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
   email: text('email').notNull().unique(),
-  patCipher: text('pat_cipher'),
-  // "Sign in with YNAB" (OAuth): refresh + current access token, encrypted
-  // like the PAT; the access token is refreshed just before it expires.
+  // "Sign in with YNAB" (OAuth): refresh + current access token, encrypted at
+  // rest (server/utils/secrets.ts); the access token is refreshed just before
+  // it expires. This is the only way Plannrr ever holds YNAB access — pasted
+  // personal access tokens were removed (YNAB's API terms keep those with
+  // their owner) and migration 0010 dropped the column that stored them.
   ynabRefreshCipher: text('ynab_refresh_cipher'),
   ynabAccessCipher: text('ynab_access_cipher'),
   ynabAccessExpiresAt: text('ynab_access_expires_at'),

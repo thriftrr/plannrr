@@ -58,10 +58,6 @@ export async function setUserAvatarKey (id: string, avatarKey: string | null): P
   await db.update(schema.users).set({ avatarKey }).where(eq(schema.users.id, id)).run()
 }
 
-export async function setUserPat (id: string, patCipher: string | null): Promise<void> {
-  await db.update(schema.users).set({ patCipher }).where(eq(schema.users.id, id)).run()
-}
-
 export async function setUserYnabOauth (
   id: string,
   tokens: { ynabRefreshCipher: string | null, ynabAccessCipher: string | null, ynabAccessExpiresAt: string | null }

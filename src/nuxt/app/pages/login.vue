@@ -8,6 +8,11 @@ const sent = ref(false)
 const error = ref('')
 const devLink = ref('')
 
+// Landing here from "Delete my account": say so — the bare sign-in form would
+// look like nothing happened.
+const route = useRoute()
+const deleted = computed(() => route.query.deleted === '1')
+
 async function submit () {
   if (!email.value.trim() || sending.value) return
   sending.value = true
@@ -39,6 +44,9 @@ function reset () {
     <div class="tagline">A YNAB planning companion</div>
 
     <section v-if="!sent" class="panel">
+      <p v-if="deleted" class="y-note done" role="status">
+        Your account and everything Plannrr held for it have been deleted.
+      </p>
       <h1>Sign in with email</h1>
       <p class="y-body">
         No password — we'll email you a sign-in link that's valid for 15 minutes.
@@ -122,6 +130,8 @@ form {
 
 .dev { margin-top: 14px; }
 .dev-url { word-break: break-all; font-weight: 700; }
+
+.panel .done { margin: 0 0 16px; }
 
 .back { margin-top: 14px; }
 

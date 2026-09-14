@@ -6,7 +6,7 @@ See the [root README](../../README.md) for what this project is and the YNAB API
 
 ```sh
 npm install
-cp .env.example .env   # then add your YNAB personal access token
+cp .env.example .env   # see the comments inside
 ```
 
 ## Development server

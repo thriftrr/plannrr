@@ -7,7 +7,10 @@ export default defineEventHandler(async (event) => {
     mock: Boolean(ynabMock),
     authenticated: Boolean(user),
     email: user?.email ?? null,
-    hasPat: Boolean(user?.patCipher || user?.ynabRefreshCipher),
-    hasEnvPat: Boolean(ynabPersonalAccessToken)
+    ynabConnected: Boolean(user?.ynabRefreshCipher),
+    // The operator's own token for the personal no-login mode. Reported only
+    // where the server honors it (dev), so the client never opens a door the
+    // API keeps shut.
+    hasEnvPat: import.meta.dev && Boolean(ynabPersonalAccessToken)
   }
 })

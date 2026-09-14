@@ -56,10 +56,10 @@ const SNAPSHOT_MONTHS = 14
 // Pulls one budget out of YNAB into snapshot form. Costs ~3 + min(months, 14)
 // API calls; callers hold the sync throttle.
 export async function snapshotYnabPlan (
-  pat: string,
+  token: string,
   plan: { id: string, name: string, currency_format?: CurrencyFormat | null }
 ): Promise<PlanSnapshot> {
-  const { months } = await ynabApi<{ months: MonthSummary[] }>(pat, `/plans/${plan.id}/months`)
+  const { months } = await ynabApi<{ months: MonthSummary[] }>(token, `/plans/${plan.id}/months`)
   const live = months
     .filter(month => !month.deleted)
     .sort((a, b) => b.month.localeCompare(a.month))
@@ -70,7 +70,7 @@ export async function snapshotYnabPlan (
   // don't promise any order. One extra call buys every month the same order.
   const rank = new Map<string, number>()
   try {
-    const res = await ynabApi<{ category_groups: CategoryGroupWithCategories[] }>(pat, `/plans/${plan.id}/categories`)
+    const res = await ynabApi<{ category_groups: CategoryGroupWithCategories[] }>(token, `/plans/${plan.id}/categories`)
     for (const group of res.category_groups) {
       for (const category of group.categories) rank.set(category.id, rank.size)
     }
@@ -83,14 +83,14 @@ export async function snapshotYnabPlan (
   const details: Record<string, MonthDetail> = {}
   for (const month of keep) {
     // Serial on purpose: a burst of parallel calls trips YNAB's rate limiter.
-    const res = await ynabApi<{ month: MonthDetail }>(pat, `/plans/${plan.id}/months/${month.month}`)
+    const res = await ynabApi<{ month: MonthDetail }>(token, `/plans/${plan.id}/months/${month.month}`)
     details[month.month] = { ...res.month, categories: inYnabOrder(res.month.categories) }
   }
 
   let scheduled: ScheduledTransaction[] = []
   try {
     const res = await ynabApi<{ scheduled_transactions: ScheduledTransaction[] }>(
-      pat, `/plans/${plan.id}/scheduled_transactions`
+      token, `/plans/${plan.id}/scheduled_transactions`
     )
     scheduled = res.scheduled_transactions.filter(txn => !txn.deleted)
   } catch { /* scheduled txns are enrichment — a failure shouldn't sink the sync */ }
@@ -105,7 +105,7 @@ export async function snapshotYnabPlan (
       date: string, amount: number, payee_name?: string | null, account_name?: string | null,
       category_name?: string | null, transfer_account_id?: string | null, deleted?: boolean
     }
-    const res = await ynabApi<{ transactions: ApiTxn[] }>(pat, `/plans/${plan.id}/transactions?since_date=${sinceKey}`)
+    const res = await ynabApi<{ transactions: ApiTxn[] }>(token, `/plans/${plan.id}/transactions?since_date=${sinceKey}`)
     transactions = res.transactions
       .filter(txn => !txn.deleted)
       .map(txn => ({
@@ -125,7 +125,7 @@ export async function snapshotYnabPlan (
   let accounts: BudgetAccount[] = []
   try {
     type ApiAccount = { id: string, name: string, type: string, on_budget?: boolean, closed?: boolean, deleted?: boolean, balance: number }
-    const res = await ynabApi<{ accounts: ApiAccount[] }>(pat, `/plans/${plan.id}/accounts`)
+    const res = await ynabApi<{ accounts: ApiAccount[] }>(token, `/plans/${plan.id}/accounts`)
     accounts = res.accounts
       .filter(a => a.on_budget && !a.closed && !a.deleted)
       .map(a => ({ id: a.id, name: a.name, type: a.type, balance: a.balance }))

@@ -15,23 +15,23 @@ const IMPORT_PREFIX = 'imp_'
 const isImportedPlanId = (planId: string) => planId.startsWith(IMPORT_PREFIX)
 const importKey = (userId: string, planId: string) => `import:${userId}:${planId}`
 
-export async function resolvePat (event: H3Event): Promise<string | null> {
+// The YNAB access token behind a request: the one "Sign in with YNAB" issued
+// to this user (refreshed as needed), or null when they haven't connected.
+// There is deliberately no other path — YNAB's API terms keep personal access
+// tokens with their owner, so Plannrr never asks anyone to paste one.
+export async function resolveYnabAccessToken (event: H3Event): Promise<string | null> {
   const user = await getSessionUser(event)
   if (user) {
     const dbUser = await getUserById(user.id)
     if (dbUser) {
-      // "Sign in with YNAB" wins; a pasted token is the fallback.
       const oauth = await resolveOauthAccessToken(dbUser)
       if (oauth) return oauth
-      if (dbUser.patCipher) {
-        const pat = decryptSecret(dbUser.patCipher)
-        if (pat) return pat
-      }
     }
   }
-  // The env PAT is a dev/personal-mode convenience ONLY. In production it must
-  // never back an arbitrary session — that would hand every signed-in user
-  // (and their sync/push actions) the operator's own YNAB account.
+  // The env token is the operator's OWN, for the dev/personal no-login mode
+  // ONLY. In production it must never back an arbitrary session — that would
+  // hand every signed-in user (and their sync/push actions) the operator's
+  // own YNAB account.
   if (!import.meta.dev) return null
   const { ynabPersonalAccessToken } = useRuntimeConfig()
   return ynabPersonalAccessToken || null
@@ -40,15 +40,14 @@ export async function resolvePat (event: H3Event): Promise<string | null> {
 export async function getPlansForRequest (event: H3Event): Promise<{
   plans: PlanSummary[]
   default_plan: PlanSummary | null
-  pat_error: boolean
 }> {
   const { ynabMock } = useRuntimeConfig()
   if (ynabMock) {
-    return { ...resolveYnabMock('/plans') as { plans: PlanSummary[], default_plan: PlanSummary | null }, pat_error: false }
+    return resolveYnabMock('/plans') as { plans: PlanSummary[], default_plan: PlanSummary | null }
   }
 
   const owner = await debtOwner(event)
-  if (!owner) return { plans: [], default_plan: null, pat_error: false }
+  if (!owner) return { plans: [], default_plan: null }
 
   const plans: PlanSummary[] = []
   let defaultPlan: PlanSummary | null = null
@@ -64,7 +63,7 @@ export async function getPlansForRequest (event: H3Event): Promise<{
     if (!defaultPlan && row.kind === 'synced') defaultPlan = summary
   }
 
-  return { plans, default_plan: defaultPlan ?? plans[0] ?? null, pat_error: false }
+  return { plans, default_plan: defaultPlan ?? plans[0] ?? null }
 }
 
 async function loadImport (event: H3Event, planId: string): Promise<ParsedImport> {

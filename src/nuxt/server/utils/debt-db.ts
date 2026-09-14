@@ -403,6 +403,9 @@ export const SYNC_COOLDOWN_SECONDS = 120
 
 const syncStampKey = (owner: string) => `debt:sync-stamp:${owner}`
 
+// Every KV key the debt page keeps per owner — account deletion clears them.
+export const debtKvKeys = (owner: string) => [settingsKey(owner), syncStampKey(owner)]
+
 export async function assertSyncAllowed (owner: string): Promise<void> {
   const stamp = await kv.get<string>(syncStampKey(owner))
   if (!stamp) return

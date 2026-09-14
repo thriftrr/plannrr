@@ -1,6 +1,6 @@
-// Force-refresh from YNAB with the saved token. Local-first: pages read
-// snapshots, so a re-sync means (1) prove the token, (2) re-snapshot every
-// synced budget source, (3) re-pull debt accounts as before.
+// Force-refresh from the connected YNAB account. Local-first: pages read
+// snapshots, so a re-sync means (1) prove the connection, (2) re-snapshot
+// every synced budget source, (3) re-pull debt accounts as before.
 export default defineEventHandler(async (event) => {
   const { ynabMock } = useRuntimeConfig()
   if (ynabMock) {
@@ -9,9 +9,9 @@ export default defineEventHandler(async (event) => {
   }
 
   const owner = await requireDebtOwner(event)
-  const pat = await resolvePat(event)
-  if (!pat) {
-    throw createError({ statusCode: 400, statusMessage: 'Save a YNAB token first' })
+  const token = await resolveYnabAccessToken(event)
+  if (!token) {
+    throw createError({ statusCode: 400, statusMessage: 'Sign in with YNAB first — connect it on the Account page' })
   }
 
   // One live sync per cooldown window — 429 carries the seconds remaining.
@@ -19,11 +19,11 @@ export default defineEventHandler(async (event) => {
 
   let plans: Array<{ id: string, name: string, currency_format?: { iso_code: string, currency_symbol: string } | null }>
   try {
-    plans = (await ynabApi<{ plans: typeof plans }>(pat, '/plans')).plans
+    plans = (await ynabApi<{ plans: typeof plans }>(token, '/plans')).plans
   } catch {
     throw createError({
       statusCode: 502,
-      statusMessage: 'YNAB rejected the token — check it under YNAB → Account Settings → Developer'
+      statusMessage: 'YNAB rejected the connection — reconnect with YNAB on the Account page'
     })
   }
 
@@ -33,7 +33,7 @@ export default defineEventHandler(async (event) => {
   for (const row of sources) {
     const plan = plans.find(p => p.id === row.ynabPlanId)
     if (!plan) continue
-    const snapshot = await snapshotYnabPlan(pat, plan)
+    const snapshot = await snapshotYnabPlan(token, plan)
     await saveSnapshot(owner, row.id, snapshot)
     await upsertPlanSource({
       id: row.id,
@@ -57,7 +57,7 @@ export default defineEventHandler(async (event) => {
   let created = 0
   let updated = 0
   try {
-    const counts = await syncLiveDebtPlans(owner, pat, targets)
+    const counts = await syncLiveDebtPlans(owner, token, targets)
     created = counts.created
     updated = counts.updated
   } catch {

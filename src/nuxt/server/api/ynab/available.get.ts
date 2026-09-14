@@ -1,15 +1,16 @@
-// The budgets a saved PAT can see, for the "which ones do you want?" picker.
+// The plans the connected YNAB account can see, for the "which ones do you
+// want?" picker.
 // One live call; marks the ones already snapshotted locally.
 export default defineEventHandler(async (event) => {
   const owner = await requireDebtOwner(event)
-  const pat = await resolvePat(event)
-  if (!pat) throw createError({ statusCode: 400, statusMessage: 'Save a YNAB token first' })
+  const token = await resolveYnabAccessToken(event)
+  if (!token) throw createError({ statusCode: 400, statusMessage: 'Sign in with YNAB first — connect it on the Account page' })
 
   let plans: Array<{ id: string, name: string, currency_format?: { iso_code: string, currency_symbol: string } | null }>
   try {
-    plans = (await ynabApi<{ plans: typeof plans }>(pat, '/plans')).plans
+    plans = (await ynabApi<{ plans: typeof plans }>(token, '/plans')).plans
   } catch {
-    throw createError({ statusCode: 502, statusMessage: 'YNAB rejected the token — check it under YNAB → Account Settings → Developer' })
+    throw createError({ statusCode: 502, statusMessage: 'YNAB rejected the connection — reconnect with YNAB on the Account page' })
   }
 
   const sources = await listPlanSources(owner)
