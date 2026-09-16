@@ -279,6 +279,10 @@ h1, h2, h3 { margin: 0; font-weight: 800; }
 }
 .y-btn:hover:not(:disabled) { background: var(--teal-dark); }
 .y-btn:disabled { opacity: 0.55; cursor: default; }
+/* Buttons rendered as links (<a class="y-btn">, e.g. "Sign in with YNAB"):
+   the global a:hover colour would otherwise paint the label the same dark
+   teal as the hover background and make it vanish. */
+a.y-btn, a.y-btn:hover, a.y-btn:visited { color: #fff; text-decoration: none; }
 
 .y-btn-secondary {
   padding: 8px 16px;
