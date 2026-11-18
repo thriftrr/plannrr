@@ -29,8 +29,18 @@ export default defineNuxtConfig({
   ],
 
   // Worker name for the Cloudflare build (otherwise nitro invents one).
+  // NUXT_CF_AUTHRR_SERVICE names the Authrr worker for a service binding, so
+  // calls to it skip the public internet (and Cloudflare's same-zone fetch
+  // restrictions). See server/utils/authrr.ts.
   nitro: {
-    cloudflare: { wrangler: { name: process.env.NUXT_CF_WORKER_NAME || 'plannrr' } }
+    cloudflare: {
+      wrangler: {
+        name: process.env.NUXT_CF_WORKER_NAME || 'plannrr',
+        ...(process.env.NUXT_CF_AUTHRR_SERVICE
+          ? { services: [{ binding: 'AUTHRR', service: process.env.NUXT_CF_AUTHRR_SERVICE }] }
+          : {})
+      }
+    }
   },
 
   app: {
@@ -103,14 +113,25 @@ export default defineNuxtConfig({
     // export-zip imports and hand-built plans only.
     ynabClientId: '',
     ynabClientSecret: '',
+    // Sign in through Authrr (see "Accounts through Authrr" in the README):
+    // the client id and secret from Authrr's Apps page. Only used when
+    // NUXT_PUBLIC_AUTHRR_ISSUER below is set.
+    authrrClientId: '',
+    authrrClientSecret: '',
     // comma-separated emails that see the feedback inbox and get notified
-    // when feedback arrives (NUXT_ADMIN_EMAILS). Nobody is admin until set.
+    // when feedback arrives (NUXT_ADMIN_EMAILS). Nobody is admin until set;
+    // signed in through Authrr, its `admin` role counts too.
     adminEmails: '',
     // NUXT_TRUST_PROXY=1 when self-hosting behind a reverse proxy that sets
     // X-Forwarded-For (Cloudflare needs nothing — cf-connecting-ip is used)
     trustProxy: '',
     // sign-up ceiling (NUXT_MAX_USERS); keeps a public instance's D1/email
     // spend bounded
-    maxUsers: '250'
+    maxUsers: '250',
+    public: {
+      // NUXT_PUBLIC_AUTHRR_ISSUER — Authrr's origin. Set, and Plannrr signs
+      // people in through Authrr instead of its own magic links.
+      authrrIssuer: ''
+    }
   }
 })

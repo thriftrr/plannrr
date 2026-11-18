@@ -23,6 +23,15 @@ export const users = sqliteTable('users', {
   palette: text('palette'),
   // When the home "fill in your profile" card was skipped. Null = still shown.
   onboardingDismissedAt: text('onboarding_dismissed_at'),
+  // Authrr: the account id ("sub") this person signs in with, once they have.
+  // Null = a local magic-link account (or one from before the switch). Null
+  // here with NUXT_PUBLIC_AUTHRR_ISSUER set means "sign in again".
+  authrrSub: text('authrr_sub').unique(),
+  // When Authrr was last asked whether this person may still use the app.
+  authrrCheckedAt: text('authrr_checked_at'),
+  // 'member' | 'admin', as Authrr said at the last sign-in or sweep. Null for
+  // a local magic-link account; admins there are decided by NUXT_ADMIN_EMAILS.
+  role: text('role'),
   createdAt: text('created_at').notNull().default(sql`(datetime('now'))`)
 })
 

@@ -44,6 +44,41 @@ Sign-in is passwordless: enter an email, get a magic link (15-minute,
 single-use; only SHA-256 digests of tokens are stored). Sessions are JWTs in
 an httpOnly cookie. In dev, magic-link emails print to the server console.
 
+### Accounts through Authrr (optional)
+
+Set `NUXT_PUBLIC_AUTHRR_ISSUER` and Plannrr signs people in through
+[Authrr](https://authrr.thriftrr.biz), the thriftrr OpenID Connect provider —
+one account and passkey across every app — instead of its own magic links.
+Register the app on Authrr's **Apps** page as `plannrr`, open access, with
+redirect URI `<NUXT_APP_ORIGIN>/auth/authrr/callback`, then set:
+
+```sh
+NUXT_PUBLIC_AUTHRR_ISSUER=https://authrr.thriftrr.biz
+NUXT_AUTHRR_CLIENT_ID=plannrr
+NUXT_AUTHRR_CLIENT_SECRET=…      # shown once, when you register or rotate
+NUXT_CF_AUTHRR_SERVICE=authrr    # the Authrr worker's name, for a service binding
+```
+
+`make secrets && make deploy`. Leave the issuer unset and the app runs its
+own accounts, exactly as before. What changes when it's on:
+
+- `/api/auth/login` and `/api/auth/verify` stand down (404); `/login` is one
+  button that opens Authrr in a small window (or a plain redirect when the
+  browser blocks it). Sign-out goes through Authrr too, so the next sign-in
+  actually asks.
+- Accounts are linked by Authrr's `sub`. An existing local account with the
+  same email is adopted the first time that person signs in, so switching an
+  instance to Authrr keeps everyone's plans and YNAB connection.
+- **Name and palette come from Authrr** and are rewritten on sign-in and on
+  each session sweep; the account page shows them read-only. Currency and
+  YNAB stay local.
+- **The session is re-checked with Authrr at most hourly** (`/oauth/check`),
+  so a ban or a removed grant reaches Plannrr without a 30-day wait. If
+  Authrr can't be reached the session stands and the check is retried.
+- Plannrr never stores the ID token — it only verifies it — so signing out
+  costs one extra "sign out everywhere?" confirmation at Authrr.
+- Authrr's `admin` role is honored alongside `NUXT_ADMIN_EMAILS`.
+
 A signed-in user can connect plans two ways:
 
 1. **Import a YNAB export zip** (YNAB → Export Plan Data). Both the newer
@@ -122,7 +157,8 @@ sending domain before inviting anyone.
   key on `X-Forwarded-For`; leave it unset on Cloudflare, where the real
   address arrives in `cf-connecting-ip`.
 - **Anyone can request a login email** for any address (capped per address,
-  per day, and per IP). `NUXT_MAX_USERS` bounds sign-ups; the magic-link
+  per day, and per IP) when the instance runs its own accounts; with Authrr,
+  that cap lives there instead. `NUXT_MAX_USERS` bounds sign-ups; the magic-link
   sender is the one endpoint on a public instance that spends money.
 - **Sessions are 30-day signed JWTs** in an httpOnly, SameSite=Lax cookie.
   Logout clears the cookie but cannot revoke a stolen token; rotate

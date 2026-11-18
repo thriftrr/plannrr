@@ -21,6 +21,14 @@ function cleanName (value: unknown): string | null | undefined {
 export default defineEventHandler(async (event) => {
   const user = await requireUser(event)
   const body = await readBody<{ firstName?: unknown, lastName?: unknown, currency?: unknown, palette?: unknown, dismissOnboarding?: unknown }>(event)
+  // Through Authrr, the name comes from there and is rewritten on every
+  // session sweep — accepting it here would silently lose the edit.
+  if (authrrEnabled() && (body?.firstName !== undefined || body?.lastName !== undefined)) {
+    const row = await getUserById(user.id)
+    if (row?.authrrSub) {
+      throw createError({ statusCode: 409, statusMessage: 'Your name lives in Authrr — change it there and it reaches every app.' })
+    }
+  }
 
   const patch: ProfilePatch = {}
 

@@ -13,6 +13,8 @@ export interface AuthUser {
   palette: string | null
   onboardingDismissedAt: string | null
   avatarUrl: string | null
+  // signed in through Authrr: name and palette live there, not here
+  authrr: boolean
 }
 
 // Session state shared across pages; refreshed from /api/auth/me.

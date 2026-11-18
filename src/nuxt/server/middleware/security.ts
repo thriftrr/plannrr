@@ -15,13 +15,25 @@ import { randomBytes } from 'node:crypto'
 // run code, so the trade is a small one.
 //
 // The CSP is production-only (dev needs Vite's websocket + eval).
+
+// Profile photos come from Authrr when sign-in goes through it.
+function authrrImgSource (): string {
+  const { public: { authrrIssuer } } = useRuntimeConfig()
+  if (!authrrIssuer) return ''
+  try {
+    return ` ${new URL(String(authrrIssuer)).origin}`
+  } catch {
+    return ''
+  }
+}
+
 function csp (nonce: string): string {
   return [
     "default-src 'self'",
     `script-src 'nonce-${nonce}' 'strict-dynamic'`,
     "style-src 'self' 'unsafe-inline'",
-    // Gravatar for avatars.
-    "img-src 'self' data: blob: https://www.gravatar.com",
+    // Gravatar for avatars, Authrr's photos when it runs accounts.
+    `img-src 'self' data: blob: https://www.gravatar.com${authrrImgSource()}`,
     "font-src 'self' data:",
     // Iconify: icon data when a set isn't bundled.
     "connect-src 'self' https://api.iconify.design",
