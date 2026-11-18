@@ -78,6 +78,13 @@
       "when": 1789420795340,
       "tag": "0010_drop_pat_cipher",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1795011828000,
+      "tag": "0011_authrr",
+      "breakpoints": true
     }
   ]
 }

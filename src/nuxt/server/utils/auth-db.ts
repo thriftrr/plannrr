@@ -41,6 +41,46 @@ export async function getUserById (id: string): Promise<DbUser | null> {
   return await db.select().from(schema.users).where(eq(schema.users.id, id)).get() ?? null
 }
 
+// ---- Authrr (server/utils/authrr.ts) ---------------------------------------
+
+// Exact match: Authrr's claims arrive already trimmed and lowercased, and
+// every local account was made from an address normalised the same way.
+export async function getUserByEmail (email: string): Promise<DbUser | null> {
+  return await db.select().from(schema.users).where(eq(schema.users.email, email)).get() ?? null
+}
+
+// Finds the account linked to an Authrr identity. A failed read behaves as
+// "nobody is linked", which sends the person through sign-in rather than
+// erroring — the safe way to fail.
+export async function getUserByAuthrrSub (sub: string): Promise<DbUser | null> {
+  try {
+    return await db.select().from(schema.users).where(eq(schema.users.authrrSub, sub)).get() ?? null
+  } catch {
+    return null
+  }
+}
+
+export interface AuthrrProfilePatch {
+  authrrSub?: string
+  email?: string
+  role?: 'admin' | 'member'
+  firstName?: string | null
+  lastName?: string | null
+  palette?: string | null
+}
+
+export async function applyAuthrrProfile (id: string, patch: AuthrrProfilePatch): Promise<void> {
+  await db.update(schema.users).set({ ...patch, authrrCheckedAt: new Date().toISOString() })
+    .where(eq(schema.users.id, id))
+    .run()
+}
+
+export async function markAuthrrChecked (id: string): Promise<void> {
+  await db.update(schema.users).set({ authrrCheckedAt: new Date().toISOString() })
+    .where(eq(schema.users.id, id))
+    .run()
+}
+
 export interface ProfilePatch {
   firstName?: string | null
   lastName?: string | null

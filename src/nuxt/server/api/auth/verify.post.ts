@@ -1,4 +1,5 @@
 export default defineEventHandler(async (event) => {
+  assertLocalAccounts()
   const body = await readBody<{ token?: string }>(event)
   const token = body?.token
   if (!token) {

@@ -8,10 +8,22 @@ const sent = ref(false)
 const error = ref('')
 const devLink = ref('')
 
+const route = useRoute()
 // Landing here from "Delete my account": say so — the bare sign-in form would
 // look like nothing happened.
-const route = useRoute()
 const deleted = computed(() => route.query.deleted === '1')
+// Back from Authrr's logout.
+const signedOut = computed(() => route.query.signedOut === '1')
+
+// With Authrr configured, accounts live there: this page is one button.
+const authrr = useRuntimeConfig().public.authrrIssuer
+const signIn = useAuthrrSignIn('/', next => navigateTo(next, { replace: true }))
+
+// A reason code from the callback (shared/utils/authrr-errors.ts), never a
+// sentence from the URL.
+if (typeof route.query.error === 'string') {
+  error.value = authrrErrorMessage(route.query.error)
+}
 
 async function submit () {
   if (!email.value.trim() || sending.value) return
@@ -43,7 +55,31 @@ function reset () {
     <NuxtLink to="/" class="y-wordmark mark">Plannrr<span>.</span></NuxtLink>
     <div class="tagline">A YNAB planning companion</div>
 
-    <section v-if="!sent" class="panel">
+    <!-- Accounts through Authrr: one button, its window does the rest. -->
+    <section v-if="authrr" class="panel">
+      <p v-if="deleted" class="y-note done" role="status">
+        Your account and everything Plannrr held for it have been deleted.
+      </p>
+      <p v-else-if="signedOut && !error" class="y-note done" role="status">
+        You're signed out.
+      </p>
+      <h1>Sign in</h1>
+      <p class="y-body">
+        Plannrr uses Authrr for sign-in — one account and passkey for every thriftrr app.
+      </p>
+      <button class="y-btn send" type="button" :disabled="signIn.waiting.value" @click="signIn.start()">
+        {{ signIn.waiting.value ? 'Waiting for Authrr…' : 'Continue with Authrr' }}
+      </button>
+      <p v-if="signIn.waiting.value" class="y-body waiting">
+        Finish signing in in the window that just opened.
+        <button class="y-btn-link" type="button" @click="signIn.cancel()">Cancel</button>
+      </p>
+      <p v-if="error || signIn.error.value" class="y-error err" role="alert">
+        {{ error || signIn.error.value }}
+      </p>
+    </section>
+
+    <section v-else-if="!sent" class="panel">
       <p v-if="deleted" class="y-note done" role="status">
         Your account and everything Plannrr held for it have been deleted.
       </p>
@@ -69,7 +105,7 @@ function reset () {
           {{ sending ? 'Sending…' : 'Email me a link' }}
         </button>
       </form>
-      <p v-if="error" class="y-error err">{{ error }}</p>
+      <p v-if="error" class="y-error err" role="alert">{{ error }}</p>
     </section>
 
     <section v-else class="panel">
@@ -124,9 +160,12 @@ form {
   gap: 10px;
 }
 
-.send { padding: 11px 13px; font-size: 14px; }
+.send { padding: 11px 13px; font-size: 14px; margin-top: 18px; width: 100%; }
+form .send { margin-top: 0; }
 
 .err { margin-top: 12px; font-size: 13.5px; }
+
+.waiting { font-size: 13px; color: var(--fg-subtle); }
 
 .dev { margin-top: 14px; }
 .dev-url { word-break: break-all; font-weight: 700; }

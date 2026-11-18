@@ -417,18 +417,33 @@ async function signOut () {
             </p>
 
             <div class="grid">
+              <!-- Name and email live in Authrr when sign-in goes through it. -->
               <label class="y-field">First name
-                <input v-model="firstName" type="text" autocomplete="given-name" maxlength="60">
+                <input
+                  v-model="firstName"
+                  type="text"
+                  autocomplete="given-name"
+                  maxlength="60"
+                  :disabled="user.authrr"
+                  :title="user.authrr ? 'Change it in Authrr — it applies to every app' : undefined"
+                >
               </label>
               <label class="y-field">Last name
-                <input v-model="lastName" type="text" autocomplete="family-name" maxlength="60">
+                <input
+                  v-model="lastName"
+                  type="text"
+                  autocomplete="family-name"
+                  maxlength="60"
+                  :disabled="user.authrr"
+                  :title="user.authrr ? 'Change it in Authrr — it applies to every app' : undefined"
+                >
               </label>
               <label class="y-field">Email
                 <input
                   type="email"
                   :value="user.email"
                   disabled
-                  title="Sign-in email — change it by signing in with a new address"
+                  :title="user.authrr ? 'Set in Authrr' : 'Sign-in email — change it by signing in with a new address'"
                 >
               </label>
               <label class="y-field">Currency

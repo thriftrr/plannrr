@@ -6,7 +6,9 @@
 //     NUXT_YNAB_PERSONAL_ACCESS_TOKEN and running the app yourself
 // Both are how the app is used without an account at all, so the gate checks
 // for them before redirecting.
-const PUBLIC_ROUTES = ['/login', '/auth/verify', '/privacy']
+// /auth/authrr/start and its callback are server routes that redirect before
+// any page renders; /auth/popup-done is where a popup sign-in lands.
+const PUBLIC_ROUTES = ['/login', '/auth/verify', '/auth/popup-done', '/auth/authrr', '/privacy']
 
 export default defineNuxtRouteMiddleware(async (to) => {
   if (PUBLIC_ROUTES.some(path => to.path === path || to.path.startsWith(`${path}/`))) return

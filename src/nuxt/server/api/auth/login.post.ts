@@ -1,6 +1,8 @@
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 export default defineEventHandler(async (event) => {
+  // Accounts live in Authrr; its sign-in is the only door.
+  assertLocalAccounts()
   const body = await readBody<{ email?: string }>(event)
   const email = body?.email?.trim().toLowerCase()
   if (!email || !EMAIL_RE.test(email)) {
@@ -22,12 +24,7 @@ export default defineEventHandler(async (event) => {
   // The link's origin is pinned by NUXT_APP_ORIGIN in production: deriving it
   // from the request would let a spoofed Host header (behind a plain reverse
   // proxy) mail out a live token pointing at an attacker's domain.
-  const config = useRuntimeConfig()
-  if (!config.appOrigin && !import.meta.dev) {
-    throw createError({ statusCode: 500, statusMessage: 'NUXT_APP_ORIGIN is not set' })
-  }
-  const origin = config.appOrigin || getRequestURL(event).origin
-  const link = `${origin}/auth/verify?token=${token}`
+  const link = `${publicOrigin(event)}/auth/verify?token=${token}`
 
   // Designed email (see server/utils/email-templates.ts).
   const message = magicLinkEmail({
